@@ -1,6 +1,6 @@
 # EEZ Studio Docker Build Tool
 
-Electron application for building EEZ Studio projects using Docker and Emscripten.
+Electron application for building EEZ Studio LVGL projects using Docker and Emscripten.
 
 ## Installation
 
