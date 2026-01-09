@@ -5,6 +5,8 @@
   <p>Electron application for building EEZ Studio LVGL projects using Docker and Emscripten</p>
 </div>
 
+![Screenshot](assets/screenshot.png)
+
 ## Features
 
 - **Run All Workflow**: One-click Setup → Build → Test sequence with automatic error handling

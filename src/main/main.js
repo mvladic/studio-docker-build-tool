@@ -451,6 +451,7 @@ ipcMain.handle('setup-project', async (event, projectInfo) => {
     // Step 4 & 5: Update build.sh and src/ui in a single container (optimization)
     mainWindow.webContents.send('log-message', { type: 'info', text: 'Updating build script and src/ui files...\n' });
     const containerId = await createTempContainer(env, dockerPath);
+    mainWindow.webContents.send('log-message', { type: 'info', text: `Container ID: ${containerId}\n` });
     
     // Copy build.sh
     const buildShPath = path.join(dockerPath, 'build.sh');
@@ -466,10 +467,34 @@ ipcMain.handle('setup-project', async (event, projectInfo) => {
       'rm', '-rf', '/project/src/ui'
     ], env, dockerPath);
     
-    // Copy src/ui directory
-    await runDockerCommand('docker', [
-      'cp', `${projectInfo.uiDir}`, `${containerId}:/project/src/`
-    ], env, dockerPath);
+    // Copy src/ui directory - verify path exists first
+    if (!projectInfo.uiDir) {
+      await runDockerCommand('docker', ['stop', containerId], env, dockerPath);
+      throw new Error('UI directory path is missing');
+    }
+    
+    try {
+      await fs.access(projectInfo.uiDir);
+    } catch {
+      await runDockerCommand('docker', ['stop', containerId], env, dockerPath);
+      throw new Error(`UI directory not found: ${projectInfo.uiDir}`);
+    }
+    
+    // Use resolved absolute path to avoid issues
+    const resolvedUiDir = path.resolve(projectInfo.uiDir);
+    mainWindow.webContents.send('log-message', { type: 'info', text: `Copying ${resolvedUiDir} to container...\n` });
+    
+    // For paths with spaces, we need to pass the command as a string instead of array
+    // when using shell: true
+    const cpCommand = `docker cp "${resolvedUiDir}" ${containerId}:/project/src/`;
+    mainWindow.webContents.send('log-message', { type: 'info', text: `Running: ${cpCommand}\n` });
+    
+    result = await runDockerCommandString(cpCommand, env, dockerPath);
+    
+    if (!result.success) {
+      await runDockerCommand('docker', ['stop', containerId], env, dockerPath);
+      throw new Error('Failed to copy src/ui directory');
+    }
     
     // Update timestamps to ensure CMake detects changes
     await runDockerCommand('docker', [
@@ -584,7 +609,15 @@ ipcMain.handle('extract-build', async (event, projectName) => {
         destPath
       ], env, dockerPath);
       
+      // index.data is optional - only fail if required files are missing
       if (!result.success) {
+        if (file === 'index.data') {
+          mainWindow.webContents.send('log-message', { 
+            type: 'info', 
+            text: `${file} not found (optional file, skipping)\n` 
+          });
+          continue;
+        }
         await runDockerCommand('docker', ['stop', containerId], env, dockerPath);
         throw new Error(`Failed to extract ${file}`);
       }
@@ -727,7 +760,72 @@ ipcMain.handle('stop-test-server', async () => {
 
 async function runDockerCommand(command, args, env, cwd) {
   return new Promise((resolve) => {
+    // Log the command for debugging
+    if (mainWindow) {
+      const cmdLine = `${command} ${args.join(' ')}`;
+      console.log('Running docker command:', cmdLine);
+      mainWindow.webContents.send('log-message', { 
+        type: 'debug', 
+        text: `DEBUG: ${cmdLine}\n` 
+      });
+    }
+    
     const dockerProcess = spawn(command, args, {
+      cwd,
+      env: { ...process.env, ...env },
+      shell: true
+    });
+
+    let output = '';
+
+    dockerProcess.stdout.on('data', (data) => {
+      const text = data.toString();
+      output += text;
+      
+      if (mainWindow && !shouldFilterDockerMessage(text)) {
+        mainWindow.webContents.send('docker-output', { type: 'stdout', text });
+      }
+    });
+
+    dockerProcess.stderr.on('data', (data) => {
+      const text = data.toString();
+      output += text;
+      
+      if (mainWindow && !shouldFilterDockerMessage(text)) {
+        mainWindow.webContents.send('docker-output', { type: 'stderr', text });
+      }
+    });
+
+    dockerProcess.on('close', (code) => {
+      resolve({
+        success: code === 0,
+        code,
+        output
+      });
+    });
+
+    dockerProcess.on('error', (error) => {
+      resolve({
+        success: false,
+        error: error.message,
+        output
+      });
+    });
+  });
+}
+
+// Run docker command as a single string (for commands with complex quoting)
+async function runDockerCommandString(commandString, env, cwd) {
+  return new Promise((resolve) => {
+    if (mainWindow) {
+      console.log('Running docker command string:', commandString);
+      mainWindow.webContents.send('log-message', { 
+        type: 'debug', 
+        text: `DEBUG: ${commandString}\n` 
+      });
+    }
+    
+    const dockerProcess = spawn(commandString, [], {
       cwd,
       env: { ...process.env, ...env },
       shell: true
