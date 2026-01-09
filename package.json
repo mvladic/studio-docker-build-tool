@@ -1,0 +1,20 @@
+{
+  "name": "eez-studio-docker-build-tool",
+  "version": "1.0.0",
+  "description": "Docker-based build tool for EEZ Studio projects",
+  "main": "src/main/main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev"
+  },
+  "keywords": ["electron", "eez", "docker", "emscripten"],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^28.0.0"
+  },
+  "dependencies": {
+    "chokidar": "^3.5.3",
+    "express": "^4.18.2"
+  }
+}

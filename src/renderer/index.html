@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>EEZ Studio Docker Build Tool</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="app-container">
+    <!-- Left Panel: Controls -->
+    <div class="left-panel">
+      <header>
+        <h1>EEZ Studio Docker Build Tool</h1>
+      </header>
+
+      <!-- Project Selection -->
+      <section class="section">
+        <h2>Project</h2>
+        <div class="form-group">
+          <label>EEZ Project File:</label>
+          <div class="file-selector">
+            <input type="text" id="projectPath" placeholder="Select .eez-project file or paste path here">
+            <button id="btnRecentProjects" class="btn btn-secondary" title="Recent Projects">▼</button>
+            <button id="btnPaste" class="btn btn-secondary" title="Paste from clipboard" disabled>📋</button>
+            <button id="btnSelectProject" class="btn btn-secondary" title="Browse for file">📁</button>
+          </div>
+          <div id="recentProjectsMenu" class="recent-menu" style="display: none;"></div>
+        </div>
+        <div id="projectInfo" class="project-info" style="display: none;">
+          <p><strong>LVGL Version:</strong> <span id="infoLvglVersion"></span></p>
+          <p><strong>Flow Support:</strong> <span id="infoFlowSupport"></span></p>
+          <p><strong>Docker Project:</strong> <span id="infoProjectName"></span></p>
+        </div>
+      </section>
+
+      <!-- Run All Section -->
+      <section class="section">
+        <h2>Run All</h2>
+        <p class="section-description">
+          Execute Setup, Build, and Test in sequence.
+        </p>
+        <button id="btnRunAll" class="btn btn-primary" disabled>
+          Run All
+        </button>
+      </section>
+
+      <!-- Setup Section -->
+      <section class="section">
+        <h2>
+          1. Setup
+          <span id="setupStatus" class="status-badge"></span>
+        </h2>
+        <p class="section-description">
+          Initialize Docker environment and copy project files.
+        </p>
+        <button id="btnSetup" class="btn btn-primary" disabled>
+          Run Setup
+        </button>
+      </section>
+
+      <!-- Build Section -->
+      <section class="section">
+        <h2>
+          2. Build
+          <span id="buildStatus" class="status-badge"></span>
+        </h2>
+        <p class="section-description">
+          Compile the project using Emscripten in Docker.
+        </p>
+        <button id="btnBuild" class="btn btn-primary" disabled>
+          Run Build
+        </button>
+        <button id="btnRunRebuild" class="btn btn-secondary" disabled>
+          Run Rebuild
+        </button>
+      </section>
+
+      <!-- Test Section -->
+      <section class="section">
+        <h2>
+          3. Test
+          <span id="testStatus" class="status-badge"></span>
+        </h2>
+        <p class="section-description">
+          Extract and serve the compiled application.
+        </p>
+        <button id="btnTest" class="btn btn-primary" disabled>
+          Start Test
+        </button>
+        <button id="btnStopTest" class="btn btn-primary" style="display: none;">
+          Stop Test
+        </button>
+      </section>
+
+      <!-- File Change Notification -->
+      <div id="fileChangeNotification" class="notification" style="display: none;">
+        <p>Files have changed. Rebuild required.</p>
+        <button id="btnRebuild" class="btn btn-primary">Rebuild</button>
+        <button id="btnDismiss" class="btn btn-secondary">Dismiss</button>
+      </div>
+    </div>
+
+    <!-- Splitter -->
+    <div class="splitter" id="splitter"></div>
+
+    <!-- Right Panel: Output -->
+    <div class="right-panel">
+      <!-- Tab Navigation -->
+      <div class="tab-nav">
+        <button id="tabLogs" class="tab-button active">Logs</button>
+        <button id="tabPreview" class="tab-button" style="display: none;">Preview</button>
+      </div>
+
+      <!-- Logs Tab -->
+      <div id="tabContentLogs" class="tab-content active">
+        <!-- Log Toolbar -->
+        <div class="log-toolbar">
+          <input type="text" id="logSearch" placeholder="Search logs..." class="search-input">
+          <button id="btnCopyLog" class="btn btn-small" title="Copy to Clipboard">📋</button>
+          <button id="btnClearLog" class="btn btn-small" title="Clear">Clear</button>
+          <button id="btnToggleTimestamp" class="btn btn-small toggle-active" title="Toggle Timestamps">🕐</button>
+          <button id="btnToggleAutoscroll" class="btn btn-small toggle-active" title="Toggle Auto-scroll">↓</button>
+          <button id="btnToggleWrap" class="btn btn-small" title="Toggle Word Wrap">⤶</button>
+        </div>
+
+        <!-- Log Output -->
+        <div id="logContainer" class="log-container">
+          <div id="logOutput" class="log-output"></div>
+        </div>
+      </div>
+
+      <!-- Preview + Console Tab -->
+      <div id="tabContentPreview" class="tab-content" style="display: none;">
+        <div id="testView">
+          <div class="test-splitter-container">
+            <div class="test-preview">
+              <iframe id="testFrame" sandbox="allow-scripts allow-same-origin"></iframe>
+            </div>
+            <div class="test-splitter" id="testSplitter"></div>
+            <div class="test-console">
+              <div id="testConsoleOutput" class="console-output"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

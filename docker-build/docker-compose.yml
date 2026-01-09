@@ -1,0 +1,17 @@
+services:
+  emscripten-build:
+    build: .
+    volumes:
+      - ${PROJECT_VOLUME}:/project
+    working_dir: /project
+    command: bash
+
+volumes:
+  v840-no-flow:
+  v840-with-flow:
+  v922-no-flow:
+  v922-with-flow:
+  v930-no-flow:
+  v930-with-flow:
+  v940-no-flow:
+  v940-with-flow:
