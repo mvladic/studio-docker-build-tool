@@ -23,6 +23,8 @@ let state = {
   diffOriginalModel: null,
   diffModifiedModel: null,
   showingDiff: false,
+  showingTemplateDiff: false,
+  lvConfTemplate: null,
   editorChangeDisposable: null
 };
 
@@ -59,6 +61,7 @@ const elements = {
   lvConfContainer: document.getElementById('lvConfContainer'),
   lvConfModifiedIndicator: document.getElementById('lvConfModifiedIndicator'),
   btnShowDiff: document.getElementById('btnShowDiff'),
+  btnCompareTemplate: document.getElementById('btnCompareTemplate'),
   btnSaveLvConf: document.getElementById('btnSaveLvConf'),
   btnRevertLvConf: document.getElementById('btnRevertLvConf'),
   btnCopyLvConf: document.getElementById('btnCopyLvConf'),
@@ -251,6 +254,9 @@ function setupEventListeners() {
   if (elements.btnShowDiff) {
     elements.btnShowDiff.addEventListener('click', toggleDiffView);
   }
+  if (elements.btnCompareTemplate) {
+    elements.btnCompareTemplate.addEventListener('click', compareWithTemplate);
+  }
   if (elements.btnSaveLvConf) {
     elements.btnSaveLvConf.addEventListener('click', saveLvConfFile);
   }
@@ -420,6 +426,9 @@ async function loadProject(projectPath) {
   // Check if it's a different project - if so, reset workflow state
   const isDifferentProject = state.projectPath && state.projectPath !== projectPath;
   
+  // Check if Docker project changed (for lv_conf.h reloading)
+  const previousDockerProject = state.projectInfo?.projectName;
+  
   state.projectPath = projectPath;
   
   // Save project path to localStorage
@@ -452,22 +461,34 @@ async function loadProject(projectPath) {
       elements.tabLvConf.style.display = 'inline-block';
     }
     
-    // Reset lv_conf.h state for new project
-    state.lvConfOriginal = null;
-    state.lvConfSaved = null;
-    state.lvConfContent = null;
-    state.lvConfModified = false;
-    state.showingDiff = false;
-    updateLvConfUI();
+    // Check if this project uses the same Docker project (same lv_conf.h)
+    // Docker project is determined by LVGL version + flow support (e.g., "v940-with-flow")
+    const isSameDockerProject = previousDockerProject === result.projectName;
     
-    // Clear the container but don't clear the editor value yet
-    if (elements.lvConfContainer && !state.monacoEditor) {
-      elements.lvConfContainer.innerHTML = '';
-    }
-    
-    // If currently viewing lv_conf.h tab, reload it immediately for new project
-    if (elements.tabLvConf && elements.tabLvConf.classList.contains('active')) {
-      loadLvConfFile();
+    // Only reset and reload lv_conf.h if Docker project changed
+    if (!isSameDockerProject) {
+      // Reset lv_conf.h state for new Docker project
+      state.lvConfOriginal = null;
+      state.lvConfSaved = null;
+      state.lvConfContent = null;
+      state.lvConfModified = false;
+      state.showingDiff = false;
+      state.showingTemplateDiff = false;
+      state.lvConfTemplate = null;
+      updateLvConfUI();
+      
+      // Clear the container but don't clear the editor value yet
+      if (elements.lvConfContainer && !state.monacoEditor) {
+        elements.lvConfContainer.innerHTML = '';
+      }
+      
+      // If currently viewing lv_conf.h tab, reload it immediately for new project
+      if (elements.tabLvConf && elements.tabLvConf.classList.contains('active')) {
+        loadLvConfFile();
+      } else {
+        // Check if lv_conf.h is modified (compare saved vs GitHub) to update tab indicator
+        checkLvConfModifiedStatus();
+      }
     }
     
     logMessage('success', `Project loaded: ${result.projectName}`);
@@ -1120,6 +1141,35 @@ async function loadLvConfFile() {
   });
 }
 
+// Check if lv_conf.h is modified without loading editor (for tab indicator)
+async function checkLvConfModifiedStatus() {
+  if (!state.projectInfo) return;
+  
+  try {
+    // Get GitHub original
+    const githubResult = await window.electronAPI.getLvConfFile(state.projectInfo.projectName);
+    if (!githubResult.success) return;
+    
+    state.lvConfOriginal = githubResult.content;
+    
+    // Get saved version
+    const savedResult = await window.electronAPI.loadSavedLvConf(state.projectInfo.projectName);
+    
+    if (savedResult.success && savedResult.content && savedResult.content.trim().length > 0) {
+      state.lvConfContent = savedResult.content;
+      state.lvConfSaved = savedResult.content;
+    } else {
+      state.lvConfContent = githubResult.content;
+      state.lvConfSaved = githubResult.content;
+    }
+    
+    // Update UI (tab indicator)
+    updateLvConfUI();
+  } catch (error) {
+    // Silently fail - indicator will update when tab is clicked
+  }
+}
+
 // Check if lv_conf.h is modified
 function checkLvConfModified() {
   if (!state.lvConfOriginal) return;
@@ -1151,16 +1201,29 @@ function updateLvConfUI() {
   if (elements.lvConfModifiedIndicator) {
     elements.lvConfModifiedIndicator.style.display = isDifferentFromGitHub ? 'inline' : 'none';
   }
+  if (elements.tabLvConf) {
+    // Show red dot in tab if modified
+    elements.tabLvConf.textContent = isDifferentFromGitHub ? '● lv_conf.h' : 'lv_conf.h';
+    elements.tabLvConf.style.color = isDifferentFromGitHub ? '#f48771' : '';
+  }
   if (elements.btnShowDiff) {
-    elements.btnShowDiff.style.display = isDifferentFromGitHub ? 'inline-block' : 'none';
+    // Hide when showing template diff
+    elements.btnShowDiff.style.display = (isDifferentFromGitHub && !state.showingTemplateDiff) ? 'inline-block' : 'none';
     elements.btnShowDiff.textContent = state.showingDiff ? '📝 Edit' : '🔍 Show Diff';
   }
+  if (elements.btnCompareTemplate) {
+    // Update button text based on state
+    elements.btnCompareTemplate.textContent = state.showingTemplateDiff ? '📝 Edit' : '📄 Compare Template';
+    // Hide when showing regular diff
+    elements.btnCompareTemplate.style.display = state.showingDiff ? 'none' : 'inline-block';
+  }
   if (elements.btnSaveLvConf) {
-    elements.btnSaveLvConf.style.display = state.lvConfModified && !state.showingDiff ? 'inline-block' : 'none';
+    elements.btnSaveLvConf.style.display = state.lvConfModified && !state.showingDiff && !state.showingTemplateDiff ? 'inline-block' : 'none';
   }
   if (elements.btnRevertLvConf) {
     // Show revert button when different from GitHub (to allow reverting to original)
-    elements.btnRevertLvConf.style.display = isDifferentFromGitHub ? 'inline-block' : 'none';
+    // Hide when showing template diff
+    elements.btnRevertLvConf.style.display = (isDifferentFromGitHub && !state.showingTemplateDiff) ? 'inline-block' : 'none';
   }
 }
 
@@ -1189,6 +1252,163 @@ async function saveLvConfFile() {
   } else {
     logMessage('error', `Failed to save lv_conf.h: ${result.error}`);
   }
+}
+
+// Compare lv_conf.h with lv_conf_template.h from LVGL
+async function compareWithTemplate() {
+  if (!state.projectInfo) return;
+  
+  // If already showing template diff, go back to edit view
+  if (state.showingTemplateDiff) {
+    // Get content from diff editor
+    let modifiedContent = '';
+    if (state.monacoDiffEditor) {
+      modifiedContent = state.monacoDiffEditor.getModifiedEditor().getValue();
+    }
+    
+    // Dispose diff models
+    if (state.diffOriginalModel) {
+      state.diffOriginalModel.dispose();
+      state.diffOriginalModel = null;
+    }
+    if (state.diffModifiedModel) {
+      state.diffModifiedModel.dispose();
+      state.diffModifiedModel = null;
+    }
+    
+    // Dispose diff editor
+    if (state.monacoDiffEditor) {
+      state.monacoDiffEditor.dispose();
+      state.monacoDiffEditor = null;
+    }
+    
+    // Replace container
+    const parent = elements.lvConfContainer.parentNode;
+    const newContainer = document.createElement('div');
+    newContainer.id = 'lvConfContainer';
+    newContainer.className = 'monaco-container';
+    parent.replaceChild(newContainer, elements.lvConfContainer);
+    elements.lvConfContainer = newContainer;
+    
+    // Recreate regular editor
+    state.monacoEditor = monaco.editor.create(elements.lvConfContainer, {
+      value: modifiedContent || state.lvConfContent,
+      language: 'c',
+      theme: 'vs-dark',
+      readOnly: false,
+      automaticLayout: true,
+      minimap: { enabled: true },
+      scrollBeyondLastLine: false,
+      fontSize: 13,
+      lineNumbers: 'on',
+      renderWhitespace: 'selection',
+      wordWrap: 'off'
+    });
+    
+    // Dispose previous listener if exists
+    if (state.editorChangeDisposable) {
+      state.editorChangeDisposable.dispose();
+      state.editorChangeDisposable = null;
+    }
+    
+    // Attach content change listener
+    state.editorChangeDisposable = state.monacoEditor.onDidChangeModelContent(() => {
+      checkLvConfModified();
+    });
+    
+    state.showingTemplateDiff = false;
+    updateLvConfUI();
+    return;
+  }
+  
+  // Fetch template if not cached
+  if (!state.lvConfTemplate) {
+    const result = await window.electronAPI.getLvConfTemplate(state.projectInfo.lvglVersion);
+    if (!result.success) {
+      logMessage('error', `Failed to fetch lv_conf_template.h: ${result.error}`);
+      return;
+    }
+    state.lvConfTemplate = result.content;
+  }
+  
+  // Get current content
+  let currentContent = '';
+  if (state.monacoEditor) {
+    currentContent = state.monacoEditor.getValue();
+  } else if (state.monacoDiffEditor) {
+    currentContent = state.monacoDiffEditor.getModifiedEditor().getValue();
+  } else {
+    currentContent = state.lvConfContent || '';
+  }
+  
+  state.lvConfContent = currentContent;
+  
+  // If in regular diff view, exit it first
+  if (state.showingDiff) {
+    // Dispose diff models
+    if (state.diffOriginalModel) {
+      state.diffOriginalModel.dispose();
+      state.diffOriginalModel = null;
+    }
+    if (state.diffModifiedModel) {
+      state.diffModifiedModel.dispose();
+      state.diffModifiedModel = null;
+    }
+    
+    // Dispose diff editor
+    if (state.monacoDiffEditor) {
+      state.monacoDiffEditor.dispose();
+      state.monacoDiffEditor = null;
+    }
+    
+    state.showingDiff = false;
+  }
+  
+  // Dispose regular editor if exists
+  if (state.editorChangeDisposable) {
+    state.editorChangeDisposable.dispose();
+    state.editorChangeDisposable = null;
+  }
+  if (state.monacoEditor) {
+    state.monacoEditor.dispose();
+    state.monacoEditor = null;
+  }
+  
+  // Replace container
+  const parent = elements.lvConfContainer.parentNode;
+  const newContainer = document.createElement('div');
+  newContainer.id = 'lvConfContainer';
+  newContainer.className = 'monaco-container';
+  parent.replaceChild(newContainer, elements.lvConfContainer);
+  elements.lvConfContainer = newContainer;
+  
+  // Create diff editor
+  state.monacoDiffEditor = monaco.editor.createDiffEditor(elements.lvConfContainer, {
+    theme: 'vs-dark',
+    readOnly: true,
+    automaticLayout: true,
+    minimap: { enabled: true },
+    scrollBeyondLastLine: false,
+    fontSize: 13,
+    lineNumbers: 'on',
+    renderSideBySide: true,
+    renderWhitespace: 'selection'
+  });
+  
+  // Create models - template on left, current on right
+  const originalModel = monaco.editor.createModel(state.lvConfTemplate, 'c');
+  const modifiedModel = monaco.editor.createModel(currentContent, 'c');
+  
+  state.monacoDiffEditor.setModel({
+    original: originalModel,
+    modified: modifiedModel
+  });
+  
+  state.diffOriginalModel = originalModel;
+  state.diffModifiedModel = modifiedModel;
+  
+  state.showingTemplateDiff = true;
+  updateLvConfUI();
 }
 
 // Toggle between diff view and edit view

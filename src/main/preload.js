@@ -15,6 +15,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   openInVSCode: (folderPath) => ipcRenderer.invoke('open-in-vscode', folderPath),
   checkFolderExists: (folderPath) => ipcRenderer.invoke('check-folder-exists', folderPath),
   getLvConfFile: (projectName) => ipcRenderer.invoke('get-lv-conf-file', projectName),
+  getLvConfTemplate: (lvglVersion) => ipcRenderer.invoke('get-lv-conf-template', lvglVersion),
   saveLvConf: (projectName, content) => ipcRenderer.invoke('save-lv-conf', projectName, content),
   loadSavedLvConf: (projectName) => ipcRenderer.invoke('load-saved-lv-conf', projectName),
   copyLvConfToDocker: (projectName, content) => ipcRenderer.invoke('copy-lv-conf-to-docker', projectName, content),

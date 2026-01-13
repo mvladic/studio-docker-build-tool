@@ -934,6 +934,38 @@ ipcMain.handle('get-lv-conf-file', async (event, projectName) => {
   }
 });
 
+// Get lv_conf_template.h from official LVGL repository
+ipcMain.handle('get-lv-conf-template', async (event, lvglVersion) => {
+  try {
+    // Fetch from official LVGL GitHub repository
+    const url = `https://raw.githubusercontent.com/lvgl/lvgl/v${lvglVersion}/lv_conf_template.h`;
+    
+    const https = require('https');
+    
+    return new Promise((resolve) => {
+      https.get(url, (res) => {
+        let data = '';
+        
+        res.on('data', (chunk) => {
+          data += chunk;
+        });
+        
+        res.on('end', () => {
+          if (res.statusCode === 200) {
+            resolve({ success: true, content: data });
+          } else {
+            resolve({ success: false, error: `lv_conf_template.h not found for LVGL v${lvglVersion}` });
+          }
+        });
+      }).on('error', (err) => {
+        resolve({ success: false, error: err.message });
+      });
+    });
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
 // Helper functions
 
 async function runDockerCommand(command, args, env, cwd) {
