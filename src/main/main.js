@@ -502,6 +502,30 @@ ipcMain.handle('setup-project', async (event, projectInfo) => {
       'find', '/project/src/ui', '-type', 'f', '-exec', 'touch', '{}', '+'
     ], env, dockerPath);
     
+    // Step 6: Copy modified lv_conf.h if it exists
+    const lvConfDir = path.join(app.getPath('userData'), 'lv_conf');
+    const lvConfPath = path.join(lvConfDir, `${projectInfo.projectName}.h`);
+    
+    try {
+      await fs.access(lvConfPath);
+      mainWindow.webContents.send('log-message', { type: 'info', text: 'Copying modified lv_conf.h...\n' });
+      
+      result = await runDockerCommand('docker', [
+        'cp',
+        lvConfPath,
+        `${containerId}:/project/lv_conf.h`
+      ], env, dockerPath);
+      
+      if (result.success) {
+        mainWindow.webContents.send('log-message', { type: 'success', text: 'Modified lv_conf.h copied successfully\n' });
+      } else {
+        mainWindow.webContents.send('log-message', { type: 'warning', text: 'Failed to copy modified lv_conf.h, using default\n' });
+      }
+    } catch (error) {
+      // File doesn't exist, use default from repository
+      mainWindow.webContents.send('log-message', { type: 'info', text: 'Using default lv_conf.h from repository\n' });
+    }
+    
     // Stop container
     await runDockerCommand('docker', ['stop', containerId], env, dockerPath);
     
@@ -785,6 +809,128 @@ ipcMain.handle('check-folder-exists', async (event, folderPath) => {
     return { exists: stats.isDirectory() };
   } catch (error) {
     return { exists: false };
+  }
+});
+
+// Save modified lv_conf.h
+ipcMain.handle('save-lv-conf', async (event, projectName, content) => {
+  try {
+    const lvConfDir = path.join(app.getPath('userData'), 'lv_conf');
+    await fs.mkdir(lvConfDir, { recursive: true });
+    
+    const filePath = path.join(lvConfDir, `${projectName}.h`);
+    await fs.writeFile(filePath, content, 'utf8');
+    
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+// Load saved lv_conf.h
+ipcMain.handle('load-saved-lv-conf', async (event, projectName) => {
+  try {
+    const lvConfDir = path.join(app.getPath('userData'), 'lv_conf');
+    const filePath = path.join(lvConfDir, `${projectName}.h`);
+    
+    const content = await fs.readFile(filePath, 'utf8');
+    
+    // If file is empty or doesn't exist, return failure so GitHub version is loaded
+    if (!content || content.trim().length === 0) {
+      return { success: false, error: 'Saved file is empty' };
+    }
+    
+    return { success: true, content };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+// Copy lv_conf.h to Docker volume
+ipcMain.handle('copy-lv-conf-to-docker', async (event, projectName, content) => {
+  try {
+    const dockerPath = path.join(__dirname, '../../docker-build');
+    const env = { PROJECT_VOLUME: projectName };
+    const tempFile = path.join(app.getPath('temp'), 'lv_conf_temp.h');
+    
+    // Write content to temp file
+    await fs.writeFile(tempFile, content, 'utf8');
+    
+    // Create temp container
+    const containerId = await createTempContainer(env, dockerPath);
+    
+    // Copy file to container
+    const result = await runDockerCommand('docker', [
+      'cp',
+      tempFile,
+      `${containerId}:/project/lv_conf.h`
+    ], env, dockerPath);
+    
+    // Stop container
+    await runDockerCommand('docker', ['stop', containerId], env, dockerPath);
+    
+    // Clean up temp file
+    await fs.unlink(tempFile);
+    
+    if (result.success) {
+      return { success: true };
+    } else {
+      throw new Error('Failed to copy lv_conf.h to Docker volume');
+    }
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+// Get lv_conf.h file from GitHub
+ipcMain.handle('get-lv-conf-file', async (event, projectName) => {
+  try {
+    // Fetch from GitHub raw content
+    const url = `https://raw.githubusercontent.com/mvladic/${projectName}/master/lv_conf.h`;
+    
+    const https = require('https');
+    
+    return new Promise((resolve) => {
+      https.get(url, (res) => {
+        let data = '';
+        
+        res.on('data', (chunk) => {
+          data += chunk;
+        });
+        
+        res.on('end', () => {
+          if (res.statusCode === 200) {
+            resolve({ success: true, content: data });
+          } else if (res.statusCode === 404) {
+            // Try 'main' branch instead of 'master'
+            const urlMain = `https://raw.githubusercontent.com/mvladic/${projectName}/main/lv_conf.h`;
+            https.get(urlMain, (res2) => {
+              let data2 = '';
+              
+              res2.on('data', (chunk) => {
+                data2 += chunk;
+              });
+              
+              res2.on('end', () => {
+                if (res2.statusCode === 200) {
+                  resolve({ success: true, content: data2 });
+                } else {
+                  resolve({ success: false, error: 'lv_conf.h not found in repository' });
+                }
+              });
+            }).on('error', (err) => {
+              resolve({ success: false, error: err.message });
+            });
+          } else {
+            resolve({ success: false, error: `HTTP ${res.statusCode}` });
+          }
+        });
+      }).on('error', (err) => {
+        resolve({ success: false, error: err.message });
+      });
+    });
+  } catch (error) {
+    return { success: false, error: error.message };
   }
 });
 

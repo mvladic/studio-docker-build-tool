@@ -12,7 +12,18 @@ let state = {
   autoScroll: true,
   wordWrap: true,
   fileChangedSinceSetup: false,
-  recentProjects: []
+  recentProjects: [],
+  monacoEditor: null,
+  monacoLoaded: false,
+  lvConfOriginal: null,
+  lvConfSaved: null,
+  lvConfContent: null,
+  lvConfModified: false,
+  monacoDiffEditor: null,
+  diffOriginalModel: null,
+  diffModifiedModel: null,
+  showingDiff: false,
+  editorChangeDisposable: null
 };
 
 // DOM Elements
@@ -40,9 +51,18 @@ const elements = {
   btnRunAll: document.getElementById('btnRunAll'),
   
   tabLogs: document.getElementById('tabLogs'),
+  tabLvConf: document.getElementById('tabLvConf'),
   tabPreview: document.getElementById('tabPreview'),
   tabContentLogs: document.getElementById('tabContentLogs'),
+  tabContentLvConf: document.getElementById('tabContentLvConf'),
   tabContentPreview: document.getElementById('tabContentPreview'),
+  lvConfContainer: document.getElementById('lvConfContainer'),
+  lvConfModifiedIndicator: document.getElementById('lvConfModifiedIndicator'),
+  btnShowDiff: document.getElementById('btnShowDiff'),
+  btnSaveLvConf: document.getElementById('btnSaveLvConf'),
+  btnRevertLvConf: document.getElementById('btnRevertLvConf'),
+  btnCopyLvConf: document.getElementById('btnCopyLvConf'),
+  btnRefreshLvConf: document.getElementById('btnRefreshLvConf'),
   
   fileChangeNotification: document.getElementById('fileChangeNotification'),
   btnRebuild: document.getElementById('btnRebuild'),
@@ -222,7 +242,27 @@ function setupEventListeners() {
   
   // Tab switching
   elements.tabLogs.addEventListener('click', () => switchTab('logs'));
+  if (elements.tabLvConf) {
+    elements.tabLvConf.addEventListener('click', () => switchTab('lvconf'));
+  }
   elements.tabPreview.addEventListener('click', () => switchTab('preview'));
+  
+  // lv_conf.h toolbar
+  if (elements.btnShowDiff) {
+    elements.btnShowDiff.addEventListener('click', toggleDiffView);
+  }
+  if (elements.btnSaveLvConf) {
+    elements.btnSaveLvConf.addEventListener('click', saveLvConfFile);
+  }
+  if (elements.btnRevertLvConf) {
+    elements.btnRevertLvConf.addEventListener('click', revertLvConfFile);
+  }
+  if (elements.btnCopyLvConf) {
+    elements.btnCopyLvConf.addEventListener('click', copyLvConfToClipboard);
+  }
+  if (elements.btnRefreshLvConf) {
+    elements.btnRefreshLvConf.addEventListener('click', loadLvConfFile);
+  }
   
   // File change notification
   elements.btnRebuild.addEventListener('click', async () => {
@@ -407,6 +447,29 @@ async function loadProject(projectPath) {
     const srcUiPath = `${projectDir}\\src\\ui`;
     checkSrcUiFolderExists(srcUiPath);
     
+    // Show lv_conf.h tab
+    if (elements.tabLvConf) {
+      elements.tabLvConf.style.display = 'inline-block';
+    }
+    
+    // Reset lv_conf.h state for new project
+    state.lvConfOriginal = null;
+    state.lvConfSaved = null;
+    state.lvConfContent = null;
+    state.lvConfModified = false;
+    state.showingDiff = false;
+    updateLvConfUI();
+    
+    // Clear the container but don't clear the editor value yet
+    if (elements.lvConfContainer && !state.monacoEditor) {
+      elements.lvConfContainer.innerHTML = '';
+    }
+    
+    // If currently viewing lv_conf.h tab, reload it immediately for new project
+    if (elements.tabLvConf && elements.tabLvConf.classList.contains('active')) {
+      loadLvConfFile();
+    }
+    
     logMessage('success', `Project loaded: ${result.projectName}`);
     
     // If switching to a different project, reset workflow state
@@ -453,6 +516,7 @@ async function loadProject(projectPath) {
     state.projectInfo = null;
     elements.projectInfo.style.display = 'none';
     elements.btnOpenInVSCode.style.display = 'none';
+    elements.tabLvConf.style.display = 'none';
     updateUI();
   }
 }
@@ -788,16 +852,45 @@ function appendConsoleMessage(level, message) {
 function switchTab(tabName) {
   if (tabName === 'logs') {
     elements.tabLogs.classList.add('active');
+    if (elements.tabLvConf) elements.tabLvConf.classList.remove('active');
     elements.tabPreview.classList.remove('active');
     elements.tabContentLogs.classList.add('active');
     elements.tabContentLogs.style.display = '';
+    if (elements.tabContentLvConf) {
+      elements.tabContentLvConf.classList.remove('active');
+      elements.tabContentLvConf.style.display = 'none';
+    }
+    elements.tabContentPreview.classList.remove('active');
+    elements.tabContentPreview.style.display = 'none';
+  } else if (tabName === 'lvconf') {
+    elements.tabLogs.classList.remove('active');
+    if (elements.tabLvConf) elements.tabLvConf.classList.add('active');
+    elements.tabPreview.classList.remove('active');
+    elements.tabContentLogs.classList.remove('active');
+    elements.tabContentLogs.style.display = 'none';
+    if (elements.tabContentLvConf) {
+      elements.tabContentLvConf.classList.add('active');
+      elements.tabContentLvConf.style.display = '';
+      // Load lv_conf.h if not already loaded (check if original content is null)
+      if (!state.lvConfOriginal || !state.monacoEditor) {
+        loadLvConfFile();
+      } else if (state.monacoEditor) {
+        // Trigger layout update when tab becomes visible
+        setTimeout(() => state.monacoEditor.layout(), 0);
+      }
+    }
     elements.tabContentPreview.classList.remove('active');
     elements.tabContentPreview.style.display = 'none';
   } else if (tabName === 'preview') {
     elements.tabLogs.classList.remove('active');
+    if (elements.tabLvConf) elements.tabLvConf.classList.remove('active');
     elements.tabPreview.classList.add('active');
     elements.tabContentLogs.classList.remove('active');
     elements.tabContentLogs.style.display = 'none';
+    if (elements.tabContentLvConf) {
+      elements.tabContentLvConf.classList.remove('active');
+      elements.tabContentLvConf.style.display = 'none';
+    }
     elements.tabContentPreview.classList.add('active');
     elements.tabContentPreview.style.display = '';
   }
@@ -921,6 +1014,441 @@ function clearLog() {
   elements.logOutput.innerHTML = '';
 }
 
+// Initialize Monaco Editor
+function initMonacoEditor() {
+  return new Promise((resolve) => {
+    if (state.monacoLoaded) {
+      resolve();
+      return;
+    }
+    
+    require.config({ paths: { vs: 'https://unpkg.com/monaco-editor@0.45.0/min/vs' } });
+    require(['vs/editor/editor.main'], function () {
+      state.monacoLoaded = true;
+      resolve();
+    });
+  });
+}
+
+// Load lv_conf.h file
+async function loadLvConfFile() {
+  if (!state.projectInfo) return;
+  
+  // Show loading message
+  if (elements.lvConfContainer) {
+    elements.lvConfContainer.innerHTML = '<div style="color: #888; padding: 20px; font-family: monospace;">Loading lv_conf.h...</div>';
+  }
+  
+  // Initialize Monaco if not already done
+  await initMonacoEditor();
+  
+  // Always load from GitHub first (this is the "original" for comparison)
+  const githubResult = await window.electronAPI.getLvConfFile(state.projectInfo.projectName);
+  if (!githubResult.success) {
+    elements.lvConfContainer.innerHTML = `<div style="color: #f48771; padding: 20px; font-family: monospace;">Error: ${githubResult.error}</div>`;
+    return;
+  }
+  
+  // Store GitHub version as original (for diff comparison)
+  state.lvConfOriginal = githubResult.content;
+  
+  // Try to load saved version
+  const savedResult = await window.electronAPI.loadSavedLvConf(state.projectInfo.projectName);
+  
+  let content = '';
+  let isSaved = false;
+  
+  if (savedResult.success && savedResult.content && savedResult.content.trim().length > 0) {
+    content = savedResult.content;
+    state.lvConfSaved = savedResult.content;
+    state.lvConfContent = savedResult.content;
+    isSaved = true;
+  } else {
+    content = githubResult.content;
+    state.lvConfSaved = githubResult.content;
+    state.lvConfContent = githubResult.content;
+  }
+  
+  // Clear container
+  elements.lvConfContainer.innerHTML = '';
+  
+  // Create or update Monaco editor
+  if (!state.monacoEditor) {
+    state.monacoEditor = monaco.editor.create(elements.lvConfContainer, {
+      value: content,
+      language: 'c',
+      theme: 'vs-dark',
+      readOnly: false,
+      automaticLayout: true,
+      minimap: { enabled: true },
+      scrollBeyondLastLine: false,
+      fontSize: 13,
+      lineNumbers: 'on',
+      renderWhitespace: 'selection',
+      wordWrap: 'off'
+    });
+  } else {
+    // Dispose and recreate the editor to ensure it displays correctly
+    state.monacoEditor.dispose();
+    state.monacoEditor = monaco.editor.create(elements.lvConfContainer, {
+      value: content,
+      language: 'c',
+      theme: 'vs-dark',
+      readOnly: false,
+      automaticLayout: true,
+      minimap: { enabled: true },
+      scrollBeyondLastLine: false,
+      fontSize: 13,
+      lineNumbers: 'on',
+      renderWhitespace: 'selection',
+      wordWrap: 'off'
+    });
+  }
+  
+  // Dispose previous listener if exists
+  if (state.editorChangeDisposable) {
+    state.editorChangeDisposable.dispose();
+    state.editorChangeDisposable = null;
+  }
+  
+  // Check if modified (compare current content to GitHub original)
+  checkLvConfModified();
+  
+  // Listen for content changes - attach immediately
+  state.editorChangeDisposable = state.monacoEditor.onDidChangeModelContent(() => {
+    checkLvConfModified();
+  });
+}
+
+// Check if lv_conf.h is modified
+function checkLvConfModified() {
+  if (!state.lvConfOriginal) return;
+  
+  // Get current content from editor (regular or diff)
+  let currentContent = null;
+  if (state.monacoEditor) {
+    currentContent = state.monacoEditor.getValue();
+  } else if (state.monacoDiffEditor) {
+    currentContent = state.monacoDiffEditor.getModifiedEditor().getValue();
+  }
+  
+  if (currentContent === null) return;
+  
+  // Store current content for UI updates
+  state.lvConfContent = currentContent;
+  
+  // Modified means different from saved version (for Save button)
+  state.lvConfModified = currentContent !== state.lvConfSaved;
+  updateLvConfUI();
+}
+
+// Update lv_conf.h UI elements
+function updateLvConfUI() {
+  // Check if different from GitHub (for diff button and indicator)
+  const isDifferentFromGitHub = state.lvConfContent !== null && state.lvConfOriginal !== null && 
+    state.lvConfContent !== state.lvConfOriginal;
+  
+  if (elements.lvConfModifiedIndicator) {
+    elements.lvConfModifiedIndicator.style.display = isDifferentFromGitHub ? 'inline' : 'none';
+  }
+  if (elements.btnShowDiff) {
+    elements.btnShowDiff.style.display = isDifferentFromGitHub ? 'inline-block' : 'none';
+    elements.btnShowDiff.textContent = state.showingDiff ? '📝 Edit' : '🔍 Show Diff';
+  }
+  if (elements.btnSaveLvConf) {
+    elements.btnSaveLvConf.style.display = state.lvConfModified && !state.showingDiff ? 'inline-block' : 'none';
+  }
+  if (elements.btnRevertLvConf) {
+    // Show revert button when different from GitHub (to allow reverting to original)
+    elements.btnRevertLvConf.style.display = isDifferentFromGitHub ? 'inline-block' : 'none';
+  }
+}
+
+// Save lv_conf.h
+async function saveLvConfFile() {
+  if (!state.monacoEditor || !state.projectInfo) return;
+  
+  const content = state.monacoEditor.getValue();
+  const result = await window.electronAPI.saveLvConf(state.projectInfo.projectName, content);
+  
+  if (result.success) {
+    logMessage('success', 'lv_conf.h saved successfully');
+    
+    // Update the saved version (but keep GitHub original for diff)
+    state.lvConfSaved = content;
+    state.lvConfContent = content;
+    state.lvConfModified = false;
+    updateLvConfUI();
+    
+    // Visual feedback
+    const originalText = elements.btnSaveLvConf.textContent;
+    elements.btnSaveLvConf.textContent = '✓ Saved';
+    setTimeout(() => {
+      elements.btnSaveLvConf.textContent = originalText;
+    }, 1500);
+  } else {
+    logMessage('error', `Failed to save lv_conf.h: ${result.error}`);
+  }
+}
+
+// Toggle between diff view and edit view
+function toggleDiffView() {
+  if (!state.lvConfOriginal) return;
+  
+  state.showingDiff = !state.showingDiff;
+  
+  if (state.showingDiff) {
+    // Switch to diff view
+    if (!state.monacoEditor) {
+      console.error('Cannot show diff: monacoEditor is null');
+      state.showingDiff = false;
+      return;
+    }
+    
+    const modifiedContent = state.monacoEditor.getValue();
+    state.lvConfContent = modifiedContent;
+    
+    // Save scroll position and cursor position
+    const scrollTop = state.monacoEditor.getScrollTop();
+    const scrollLeft = state.monacoEditor.getScrollLeft();
+    const cursorPosition = state.monacoEditor.getPosition();
+    
+    // Dispose listener first
+    if (state.editorChangeDisposable) {
+      state.editorChangeDisposable.dispose();
+      state.editorChangeDisposable = null;
+    }
+    
+    // Dispose regular editor
+    state.monacoEditor.dispose();
+    state.monacoEditor = null;
+    
+    // Replace container with a fresh one to avoid any lingering event handlers
+    const parent = elements.lvConfContainer.parentNode;
+    const newContainer = document.createElement('div');
+    newContainer.id = 'lvConfContainer';
+    newContainer.className = 'monaco-container';
+    parent.replaceChild(newContainer, elements.lvConfContainer);
+    elements.lvConfContainer = newContainer;
+    
+    // Create diff editor
+    state.monacoDiffEditor = monaco.editor.createDiffEditor(elements.lvConfContainer, {
+      theme: 'vs-dark',
+      readOnly: true,
+      automaticLayout: true,
+      minimap: { enabled: true },
+      scrollBeyondLastLine: false,
+      fontSize: 13,
+      lineNumbers: 'on',
+      renderSideBySide: true,
+      renderWhitespace: 'selection'
+    });
+    
+    // Create models and store references for later disposal
+    const originalModel = monaco.editor.createModel(state.lvConfOriginal, 'c');
+    const modifiedModel = monaco.editor.createModel(modifiedContent, 'c');
+    
+    // Set original (left) and modified (right) models
+    state.monacoDiffEditor.setModel({
+      original: originalModel,
+      modified: modifiedModel
+    });
+    
+    // Store models for disposal
+    state.diffOriginalModel = originalModel;
+    state.diffModifiedModel = modifiedModel;
+    
+    // Restore scroll position on the modified (right) editor
+    setTimeout(() => {
+      const modifiedEditor = state.monacoDiffEditor.getModifiedEditor();
+      modifiedEditor.setScrollTop(scrollTop);
+      modifiedEditor.setScrollLeft(scrollLeft);
+      if (cursorPosition) {
+        modifiedEditor.setPosition(cursorPosition);
+      }
+    }, 100);
+    
+  } else {
+    // Switch back to edit view
+    if (!state.monacoDiffEditor) {
+      console.error('Cannot switch to edit: monacoDiffEditor is null');
+      state.showingDiff = true;
+      return;
+    }
+    
+    const modifiedEditor = state.monacoDiffEditor.getModifiedEditor();
+    const modifiedContent = modifiedEditor.getValue();
+    state.lvConfContent = modifiedContent;
+    
+    // Save scroll position and cursor position from the modified (right) editor
+    const scrollTop = modifiedEditor.getScrollTop();
+    const scrollLeft = modifiedEditor.getScrollLeft();
+    const cursorPosition = modifiedEditor.getPosition();
+    
+    // Dispose diff models first
+    if (state.diffOriginalModel) {
+      state.diffOriginalModel.dispose();
+      state.diffOriginalModel = null;
+    }
+    if (state.diffModifiedModel) {
+      state.diffModifiedModel.dispose();
+      state.diffModifiedModel = null;
+    }
+    
+    // Dispose diff editor
+    state.monacoDiffEditor.dispose();
+    state.monacoDiffEditor = null;
+    
+    // Replace container with a fresh one to avoid any lingering event handlers
+    const parent = elements.lvConfContainer.parentNode;
+    const newContainer = document.createElement('div');
+    newContainer.id = 'lvConfContainer';
+    newContainer.className = 'monaco-container';
+    parent.replaceChild(newContainer, elements.lvConfContainer);
+    elements.lvConfContainer = newContainer;
+    
+    // Recreate regular editor
+    state.monacoEditor = monaco.editor.create(elements.lvConfContainer, {
+      value: modifiedContent,
+      language: 'c',
+      theme: 'vs-dark',
+      readOnly: false,
+      automaticLayout: true,
+      minimap: { enabled: true },
+      scrollBeyondLastLine: false,
+      fontSize: 13,
+      lineNumbers: 'on',
+      renderWhitespace: 'selection',
+      wordWrap: 'off'
+    });
+    
+    // Dispose previous listener if exists
+    if (state.editorChangeDisposable) {
+      state.editorChangeDisposable.dispose();
+      state.editorChangeDisposable = null;
+    }
+    
+    // Attach content change listener immediately
+    state.editorChangeDisposable = state.monacoEditor.onDidChangeModelContent(() => {
+      checkLvConfModified();
+    });
+    
+    // Restore scroll position and cursor position after a short delay
+    setTimeout(() => {
+      if (state.monacoEditor) {
+        state.monacoEditor.setScrollTop(scrollTop);
+        state.monacoEditor.setScrollLeft(scrollLeft);
+        if (cursorPosition) {
+          state.monacoEditor.setPosition(cursorPosition);
+        }
+        state.monacoEditor.focus();
+      }
+    }, 50);
+  }
+  
+  updateLvConfUI();
+}
+
+// Revert lv_conf.h to GitHub version
+async function revertLvConfFile() {
+  if (!state.lvConfOriginal) return;
+  
+  const confirmed = confirm('Are you sure you want to discard all changes and revert to the GitHub version?');
+  if (!confirmed) return;
+  
+  // Delete saved file by saving empty content (which will be ignored on load)
+  if (state.projectInfo) {
+    await window.electronAPI.saveLvConf(state.projectInfo.projectName, '');
+  }
+  
+  // If in diff view, switch back to edit view first
+  if (state.showingDiff) {
+    state.showingDiff = false;
+    
+    // Dispose diff models
+    if (state.diffOriginalModel) {
+      state.diffOriginalModel.dispose();
+      state.diffOriginalModel = null;
+    }
+    if (state.diffModifiedModel) {
+      state.diffModifiedModel.dispose();
+      state.diffModifiedModel = null;
+    }
+    
+    // Dispose diff editor
+    if (state.monacoDiffEditor) {
+      state.monacoDiffEditor.dispose();
+      state.monacoDiffEditor = null;
+    }
+    
+    // Clear container
+    elements.lvConfContainer.innerHTML = '';
+    
+    // Recreate regular editor with original content
+    state.monacoEditor = monaco.editor.create(elements.lvConfContainer, {
+      value: state.lvConfOriginal,
+      language: 'c',
+      theme: 'vs-dark',
+      readOnly: false,
+      automaticLayout: true,
+      minimap: { enabled: true },
+      scrollBeyondLastLine: false,
+      fontSize: 13,
+      lineNumbers: 'on',
+      renderWhitespace: 'selection',
+      wordWrap: 'off'
+    });
+    
+    // Dispose previous listener if exists
+    if (state.editorChangeDisposable) {
+      state.editorChangeDisposable.dispose();
+      state.editorChangeDisposable = null;
+    }
+    
+    // Listen for content changes
+    state.editorChangeDisposable = state.monacoEditor.onDidChangeModelContent(() => {
+      checkLvConfModified();
+    });
+  } else if (state.monacoEditor) {
+    // Just set the value to original
+    state.monacoEditor.setValue(state.lvConfOriginal);
+  }
+  
+  // Reset saved state to original
+  state.lvConfSaved = state.lvConfOriginal;
+  state.lvConfContent = state.lvConfOriginal;
+  state.lvConfModified = false;
+  updateLvConfUI();
+  logMessage('info', 'All changes discarded - reverted to GitHub version');
+}
+
+// Copy lv_conf.h to clipboard
+function copyLvConfToClipboard() {
+  let codeText = '';
+  
+  if (state.monacoEditor) {
+    codeText = state.monacoEditor.getValue();
+  }
+  
+  if (!codeText) {
+    alert('No content to copy');
+    return;
+  }
+  
+  navigator.clipboard.writeText(codeText).then(() => {
+    // Visual feedback
+    const originalText = elements.btnCopyLvConf.textContent;
+    elements.btnCopyLvConf.textContent = '✓';
+    setTimeout(() => {
+      elements.btnCopyLvConf.textContent = originalText;
+    }, 1000);
+  }).catch(err => {
+    console.error('Failed to copy code:', err);
+    alert('Failed to copy to clipboard');
+  });
+}
+
+// Highlight C code with line numbers
 // Toggle timestamps
 function toggleTimestamps() {
   state.showTimestamps = !state.showTimestamps;

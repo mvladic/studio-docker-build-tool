@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>EEZ Studio Docker Build Tool</title>
   <link rel="stylesheet" href="styles.css">
+  <script src="https://unpkg.com/monaco-editor@0.45.0/min/vs/loader.js"></script>
 </head>
 <body>
   <div class="app-container">
@@ -112,6 +113,7 @@
       <!-- Tab Navigation -->
       <div class="tab-nav">
         <button id="tabLogs" class="tab-button active">Logs</button>
+        <button id="tabLvConf" class="tab-button" style="display: none;">lv_conf.h</button>
         <button id="tabPreview" class="tab-button" style="display: none;">Preview</button>
       </div>
 
@@ -131,6 +133,20 @@
         <div id="logContainer" class="log-container">
           <div id="logOutput" class="log-output"></div>
         </div>
+      </div>
+
+      <!-- lv_conf.h Tab -->
+      <div id="tabContentLvConf" class="tab-content" style="display: none;">
+        <div class="code-toolbar">
+          <span class="toolbar-label">lv_conf.h</span>
+          <span id="lvConfModifiedIndicator" class="modified-indicator" style="display: none;">● Modified</span>
+          <button id="btnShowDiff" class="btn btn-small" style="display: none;" title="Show Diff">🔍 Show Diff</button>
+          <button id="btnSaveLvConf" class="btn btn-small" style="display: none;" title="Save">💾 Save</button>
+          <button id="btnRevertLvConf" class="btn btn-small" style="display: none;" title="Revert to GitHub version">↶ Revert</button>
+          <button id="btnCopyLvConf" class="btn btn-small" title="Copy to Clipboard">📋</button>
+          <button id="btnRefreshLvConf" class="btn btn-small" title="Refresh">🔄</button>
+        </div>
+        <div id="lvConfContainer" class="monaco-container"></div>
       </div>
 
       <!-- Preview + Console Tab -->

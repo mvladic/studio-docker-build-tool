@@ -283,6 +283,7 @@ header h1 {
   flex: 1;
   flex-direction: column;
   overflow: hidden;
+  background: #1e1e1e;
 }
 
 .tab-content.active {
@@ -295,6 +296,28 @@ header h1 {
   padding: 10px;
   background: #2d2d2d;
   border-bottom: 1px solid #444;
+}
+
+.code-toolbar {
+  display: flex;
+  gap: 10px;
+  padding: 10px;
+  background: #2d2d2d;
+  border-bottom: 1px solid #444;
+  align-items: center;
+}
+
+.toolbar-label {
+  font-weight: 600;
+  color: #d4d4d4;
+}
+
+.modified-indicator {
+  color: #f48771;
+  font-size: 12px;
+  font-weight: 600;
+  margin-left: 10px;
+  margin-right: auto;
 }
 
 .search-input {
@@ -328,6 +351,12 @@ header h1 {
   flex: 1;
   overflow: auto;
   padding: 10px;
+}
+
+.monaco-container {
+  flex: 1;
+  overflow: hidden;
+  background: #1e1e1e;
 }
 
 .log-output {
