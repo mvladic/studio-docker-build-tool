@@ -158,6 +158,10 @@ header h1 {
   margin-bottom: 5px;
 }
 
+.project-info button {
+  margin-top: 10px;
+}
+
 /* Buttons */
 .btn {
   padding: 10px 20px;

@@ -756,6 +756,38 @@ ipcMain.handle('stop-test-server', async () => {
   return { success: true };
 });
 
+// Open folder in VS Code
+ipcMain.handle('open-in-vscode', async (event, folderPath) => {
+  try {
+    const { exec } = require('child_process');
+    const util = require('util');
+    const execAsync = util.promisify(exec);
+    
+    // Check if VS Code is installed by trying to run 'code --version'
+    try {
+      await execAsync('code --version');
+    } catch (error) {
+      return { success: false, error: 'VS Code is not installed or not in PATH' };
+    }
+    
+    // Open the folder in VS Code
+    await execAsync(`code "${folderPath}"`);
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+// Check if folder exists
+ipcMain.handle('check-folder-exists', async (event, folderPath) => {
+  try {
+    const stats = await fs.stat(folderPath);
+    return { exists: stats.isDirectory() };
+  } catch (error) {
+    return { exists: false };
+  }
+});
+
 // Helper functions
 
 async function runDockerCommand(command, args, env, cwd) {

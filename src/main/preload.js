@@ -12,6 +12,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   extractBuild: (projectName) => ipcRenderer.invoke('extract-build', projectName),
   startTestServer: (outputPath) => ipcRenderer.invoke('start-test-server', outputPath),
   stopTestServer: () => ipcRenderer.invoke('stop-test-server'),
+  openInVSCode: (folderPath) => ipcRenderer.invoke('open-in-vscode', folderPath),
+  checkFolderExists: (folderPath) => ipcRenderer.invoke('check-folder-exists', folderPath),
   
   // Event listeners
   onDockerOutput: (callback) => {

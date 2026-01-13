@@ -26,6 +26,7 @@ const elements = {
   infoLvglVersion: document.getElementById('infoLvglVersion'),
   infoFlowSupport: document.getElementById('infoFlowSupport'),
   infoProjectName: document.getElementById('infoProjectName'),
+  btnOpenInVSCode: document.getElementById('btnOpenInVSCode'),
   
   setupStatus: document.getElementById('setupStatus'),
   buildStatus: document.getElementById('buildStatus'),
@@ -216,6 +217,9 @@ function setupEventListeners() {
   elements.btnStopTest.addEventListener('click', stopTest);
   elements.btnRunAll.addEventListener('click', runAll);
   
+  // Open in VS Code button
+  elements.btnOpenInVSCode.addEventListener('click', openInVSCode);
+  
   // Tab switching
   elements.tabLogs.addEventListener('click', () => switchTab('logs'));
   elements.tabPreview.addEventListener('click', () => switchTab('preview'));
@@ -301,6 +305,35 @@ async function selectProjectFile() {
   }
 }
 
+// Open src/ui folder in VS Code
+async function openInVSCode() {
+  if (!state.projectPath) return;
+  
+  const projectDir = state.projectPath.substring(0, state.projectPath.lastIndexOf('\\'));
+  const srcUiPath = `${projectDir}\\src\\ui`;
+  
+  logMessage('info', `Opening ${srcUiPath} in VS Code...`);
+  
+  const result = await window.electronAPI.openInVSCode(srcUiPath);
+  
+  if (result.success) {
+    logMessage('success', 'Opened in VS Code successfully.');
+  } else {
+    logMessage('error', `Failed to open in VS Code: ${result.error}`);
+  }
+}
+
+// Check if src/ui folder exists and show/hide button
+async function checkSrcUiFolderExists(folderPath) {
+  const result = await window.electronAPI.checkFolderExists(folderPath);
+  
+  if (result.exists) {
+    elements.btnOpenInVSCode.style.display = 'inline-block';
+  } else {
+    elements.btnOpenInVSCode.style.display = 'none';
+  }
+}
+
 // Toggle recent projects menu
 function toggleRecentProjectsMenu() {
   const menu = elements.recentProjectsMenu;
@@ -369,6 +402,11 @@ async function loadProject(projectPath) {
     elements.infoProjectName.textContent = result.projectName;
     elements.projectInfo.style.display = 'block';
     
+    // Show VS Code button if src/ui folder exists
+    const projectDir = projectPath.substring(0, projectPath.lastIndexOf('\\'));
+    const srcUiPath = `${projectDir}\\src\\ui`;
+    checkSrcUiFolderExists(srcUiPath);
+    
     logMessage('success', `Project loaded: ${result.projectName}`);
     
     // If switching to a different project, reset workflow state
@@ -414,6 +452,7 @@ async function loadProject(projectPath) {
     logMessage('error', `Failed to load project: ${result.error}`);
     state.projectInfo = null;
     elements.projectInfo.style.display = 'none';
+    elements.btnOpenInVSCode.style.display = 'none';
     updateUI();
   }
 }
