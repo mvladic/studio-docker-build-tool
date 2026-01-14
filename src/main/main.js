@@ -353,12 +353,16 @@ ipcMain.handle('setup-project', async (event, projectInfo) => {
     
     // Step 1: Build Docker image
     mainWindow.webContents.send('log-message', { type: 'info', text: 'Building Docker image...\n' });
-    let result = await runDockerCommand('docker-compose', ['build'], env, dockerPath);
-    if (!result.success) throw new Error('Failed to build Docker image');
+    let result = await runDockerCommandSilent('docker-compose', ['build'], env, dockerPath);
+    if (!result.success) {
+      mainWindow.webContents.send('log-message', { type: 'error', text: 'docker-build-emscripten-build  Failed\n' });
+      throw new Error('Failed to build Docker image');
+    }
+    mainWindow.webContents.send('log-message', { type: 'success', text: 'docker-build-emscripten-build  Built\n' });
     
     // Step 2: Check if volume exists and has content
     mainWindow.webContents.send('log-message', { type: 'info', text: 'Checking if project is already set up...\n' });
-    result = await runDockerCommand('docker-compose', [
+    result = await runDockerCommandSilent('docker-compose', [
       'run', '--rm', 'emscripten-build',
       'test', '-f', '/project/build.sh'
     ], env, dockerPath);
