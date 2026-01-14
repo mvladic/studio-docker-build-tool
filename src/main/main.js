@@ -228,19 +228,22 @@ ipcMain.handle('read-project-file', async (event, projectPath) => {
     const flowSupport = project.settings?.general?.flowSupport || false;
     const displayWidth = project.settings?.general?.displayWidth || 800;
     const displayHeight = project.settings?.general?.displayHeight || 480;
+    const destinationFolder = project.settings?.build?.destinationFolder || 'src/ui';
     
     if (!lvglVersion) {
       throw new Error('LVGL version not specified in project settings');
     }
     
     const projectDir = path.dirname(projectPath);
-    const uiDir = path.join(projectDir, 'src', 'ui');
+    // Use destinationFolder from settings (convert backslashes to forward slashes)
+    const normalizedDestination = destinationFolder.replace(/\\/g, '/');
+    const uiDir = path.join(projectDir, normalizedDestination);
     
-    // Check if src/ui exists
+    // Check if destination folder exists
     try {
       await fs.access(uiDir);
     } catch {
-      throw new Error(`src/ui directory not found at: ${uiDir}`);
+      throw new Error(`Build destination directory not found at: ${uiDir}`);
     }
     
     // Start file watcher immediately when project is loaded
@@ -255,6 +258,7 @@ ipcMain.handle('read-project-file', async (event, projectPath) => {
       flowSupport,
       projectDir,
       uiDir,
+      destinationFolder: normalizedDestination,
       displayWidth,
       displayHeight,
       setupComplete: buildStatus.setupComplete,
@@ -406,8 +410,8 @@ ipcMain.handle('setup-project', async (event, projectInfo) => {
       }
     }
     
-    // Step 4: Update src/ui (reuse container from clone if first-time setup)
-    mainWindow.webContents.send('log-message', { type: 'info', text: 'Updating src/ui files...\n' });
+    // Step 4: Update build files (reuse container from clone if first-time setup)
+    mainWindow.webContents.send('log-message', { type: 'info', text: 'Updating build files...\n' });
     if (!containerId) {
       // Create container only if we didn't create one for cloning
       containerId = await createTempContainer(env, dockerPath);
@@ -420,7 +424,7 @@ ipcMain.handle('setup-project', async (event, projectInfo) => {
       'sh', '-c', '"rm -rf /project/src && mkdir -p /project/src"'
     ], env, dockerPath);
     
-    // Copy src/ui directory - verify path exists first
+    // Copy build destination directory - verify path exists first
     if (!projectInfo.uiDir) {
       await runDockerCommand('docker', ['stop', containerId], env, dockerPath);
       throw new Error('UI directory path is missing');
@@ -437,6 +441,7 @@ ipcMain.handle('setup-project', async (event, projectInfo) => {
     const resolvedUiDir = path.resolve(projectInfo.uiDir);
     mainWindow.webContents.send('log-message', { type: 'info', text: `Copying ${resolvedUiDir} to container...\n` });
     
+    // Docker path is always /project/src/ui regardless of local destinationFolder
     // For paths with spaces, we need to pass the command as a string instead of array
     // when using shell: true
     const cpCommand = `docker cp "${resolvedUiDir}" ${containerId}:/project/src/`;
@@ -446,10 +451,11 @@ ipcMain.handle('setup-project', async (event, projectInfo) => {
     
     if (!result.success) {
       await runDockerCommand('docker', ['stop', containerId], env, dockerPath);
-      throw new Error('Failed to copy src/ui directory');
+      throw new Error('Failed to copy build destination directory');
     }
     
     // Update timestamps to ensure CMake detects changes
+    // Docker path is always /project/src/ui regardless of local destinationFolder
     await runDockerCommand('docker', [
       'exec', containerId,
       'find', '/project/src/ui', '-type', 'f', '-exec', 'touch', '{}', '+'

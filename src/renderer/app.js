@@ -300,7 +300,7 @@ function setupIPCListeners() {
       return;
     }
     
-    // For src/ui files
+    // For build destination files
     if (state.setupComplete && !state.fileChangedSinceSetup) {
       state.fileChangedSinceSetup = true;
       elements.fileChangeNotification.style.display = 'flex';
