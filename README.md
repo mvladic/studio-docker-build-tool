@@ -2,23 +2,35 @@
 
 <div align="center">
   <img src="assets/icon.png" alt="EEZ Studio Docker Build Tool" width="128" height="128">
-  <p>Electron application for building EEZ Studio LVGL projects using Docker and Emscripten</p>
+  <p>Electron application for building <a href="https://github.com/eez-open/studio">EEZ Studio</a> LVGL projects using Docker and Emscripten</p>
 </div>
 
 ![Screenshot](assets/screenshot.png)
 
+## About
+
+This tool provides a user-friendly desktop interface for building LVGL-based projects created with [EEZ Studio](https://github.com/eez-open/studio). It uses the [lvgl-simulator-for-studio-docker-build](https://github.com/mvladic/lvgl-simulator-for-studio-docker-build) repository to compile your projects into WebAssembly applications that run in the browser.
+
+**Key Components:**
+- **EEZ Studio**: Visual development tool for creating LVGL user interfaces
+- **Build Repository**: [lvgl-simulator-for-studio-docker-build](https://github.com/mvladic/lvgl-simulator-for-studio-docker-build) - LVGL simulator with Emscripten build scripts
+- **Docker**: Isolated build environment with Emscripten toolchain
+- **This Tool**: Desktop GUI that orchestrates the build process
+
 ## Features
 
-- **Run All Workflow**: One-click Setup → Build → Test sequence with automatic error handling
-- **Project Management**: Browse .eez-project files with recent projects list and clipboard paste
-- **Docker Integration**: Automated volume management with per-project Emscripten cache
-- **File Watching**: Auto-detect changes in eez-project and src/ui, prompt for rebuild
+- **Simplified Workflow**: One-click Build button that handles Setup → Build → Extract automatically
+- **Project Management**: Browse .eez-project files with recent projects dropdown and clipboard paste
+- **Docker Integration**: Automated volume management with persistent Emscripten environment
 - **Test Server**: Built-in web server with live preview, console output, and cache-busting
 - **Tabbed Interface**: Separate views for build logs and test preview/console
-- **Duration Tracking**: See how long each operation takes
+- **Clean Options**: Clean Build (removes build directory) or Clean All (fresh start from scratch)
+- **Abort Support**: Cancel long-running build operations mid-process
 - **Smart Logs**: Searchable, filterable logs with timestamps, word wrap, and autoscroll
 - **Resizable Panels**: Customizable layout with draggable splitters
-- **Persistent Settings**: Remembers last project, panel sizes, and log preferences
+- **Persistent Settings**: Remembers last project, window state, panel sizes, and log preferences
+- **VS Code Integration**: Open generated source files directly in VS Code
+- **EEZ Studio Integration**: Quick-open projects in EEZ Studio
 
 ## Prerequisites
 
@@ -63,36 +75,42 @@ Output will be in the `dist/` folder.
 
 ## Workflow
 
-### Quick Start (Run All)
-1. **Select Project**: Choose your .eez-project file or paste path
-2. **Click "Run All"**: Automatically runs Setup → Build → Test
-3. **View Results**: Switch between Logs and Preview+Console tabs
+### Quick Start
+1. **Select Project**: Choose your .eez-project file or paste path from clipboard
+2. **Click "Build"**: Automatically runs Setup → Build → Extract in one operation
+3. **Click "Start Test"**: Launch the web preview with live console
+4. **View Results**: Switch between Logs and Preview tabs
 
-### Manual Workflow
-1. **Setup**: Initialize Docker environment and copy source files
-2. **Build**: Compile the project with Emscripten
-3. **Test**: Extract and run the compiled WebAssembly application
+### Build Process
+The **Build** button performs three steps automatically:
+1. **Setup**: Initializes Docker environment, clones/updates repository, copies your source files
+2. **Build**: Compiles the project with Emscripten (LVGL + your UI code)
+3. **Extract**: Copies the compiled WebAssembly files to the output directory
 
-### File Watching
-- Changes detected in `eez-project` or `src/ui` trigger notification
-- Click **Rebuild** to run full workflow automatically
-- Or **Dismiss** to ignore changes
+### Clean Options
+- **Clean Build**: Removes only the `/project/build` directory (forces recompilation)
+- **Clean All**: Removes entire `/project` directory (fresh clone from GitHub next build)
+
+### Abort Operations
+- Click **Abort** button during Build to cancel the operation
+- The current Docker process is terminated immediately
+- Useful for long builds or when you need to make changes
 
 ## Project Structure
 
 ```
 src/
   main/
-    main.js          # Electron main process
-    preload.js       # IPC bridge
+    main.js          # Electron main process with Docker/IPC handlers
+    preload.js       # Secure IPC bridge
   renderer/
-    index.html       # Main UI
+    index.html       # Main UI markup
     app.js           # UI logic and state management
-    styles.css       # Styling
+    styles.css       # Modern gradient styling
 docker-build/
-  Dockerfile         # Docker environment setup
-  docker-compose.yml # Docker services with named volumes
-  build.sh           # Emscripten build script
+  Dockerfile         # Emscripten 4.0.20 with FreeType support
+  docker-compose.yml # Docker services with named volume
+  output/            # Extracted build files (index.html, index.js, etc.)
 assets/
   icon.png           # Application icon (Linux)
   icon.ico           # Application icon (Windows)
@@ -101,42 +119,90 @@ assets/
 
 ## Docker Volumes
 
-The tool uses named volumes for efficient builds:
-- `v840-no-flow`, `v840-with-flow` - LVGL 8.4.0 caches
-- `v922-no-flow`, `v922-with-flow` - LVGL 9.2.2 caches
-- `v930-no-flow`, `v930-with-flow` - LVGL 9.3.0 caches
-- `v940-no-flow`, `v940-with-flow` - LVGL 9.4.0 caches
+The tool uses a single named volume for efficient builds:
+- **lvgl-simulator**: Persistent Docker volume containing the cloned [lvgl-simulator-for-studio-docker-build](https://github.com/mvladic/lvgl-simulator-for-studio-docker-build) repository and Emscripten cache
 
-Each project gets its own persistent Emscripten cache for faster rebuilds.
+The repository is cloned once on first setup, then updated via `git pull` on subsequent builds. Source files from your project's destination folder (configured in EEZ Studio settings) are copied to `/project/src/` before each build.
+
+## UI Features
+
+### Recent Projects
+- Click the dropdown arrow (▼) next to the project path field
+- Navigate with arrow keys, Enter to select
+- Recently used projects appear at the top
+
+### Clipboard Paste
+- The **📋 Paste** button is only enabled when clipboard contains an `.eez-project` path
+- Automatically detects valid project paths
+
+### Reload Project
+- Refresh project settings without restarting the app
+- Useful after changing LVGL version or display settings in EEZ Studio
+
+### Open in EEZ Studio / VS Code
+- **Open Project in EEZ Studio**: Launch the .eez-project file
+- **Open Generated Source in VS Code**: Open the destination folder (visible only if folder exists)
+
+### Status Badges
+- **Pending**: Gray - operation not started
+- **In Progress**: Yellow with pulse animation - currently running
+- **Complete**: Green - operation successful
+- **Error/Aborted**: Red - operation failed or cancelled
 
 ## Keyboard Shortcuts
 
-- **Ctrl+V** (in project path field): Paste clipboard path
-- **Search logs**: Type in search field to filter
+- **Arrow Keys**: Navigate recent projects dropdown
+- **Enter**: Select highlighted project in dropdown
+- **Escape**: Close dropdown
+- **Tab**: Close dropdown and move to next field
 
 ## Troubleshooting
 
 ### Docker Not Found
 - Install Docker Desktop from https://www.docker.com/products/docker-desktop
 - Ensure Docker Desktop is running before launching the app
+- Check that `docker --version` works in your terminal
 
 ### Build Failures
-- Check Docker logs in the Logs tab
-- Verify `src/ui` folder exists next to .eez-project file
+- Check Docker logs in the Logs tab for detailed error messages
+- Verify destination folder (from EEZ Studio settings) exists and contains generated files
 - Ensure LVGL version is supported (8.4.0, 9.2.2, 9.3.0, 9.4.0)
-- Check that eez-project-file includes valid LVGL configuration
+- Try **Clean All** followed by **Build** for a fresh start
 
 ### Test Server Issues
 - The test server automatically finds available ports starting from 3000
 - If preview doesn't load, check browser console in the Console tab
-- Click Stop Test and Start Test again to refresh
+- Build must complete successfully before Test button is enabled
+- Click **Stop Test** and **Start Test** again to refresh with cache-busting
 
 ### Volume Cleanup
-If you need to reset Docker volumes:
+If you need to reset the Docker volume:
 ```bash
-docker volume ls | grep 'v840\|v922\|v930\|v940'
-docker volume rm <volume-name>
+docker volume ls
+docker volume rm lvgl-simulator
 ```
+
+Next build will clone the repository from scratch.
+
+### Abort Not Working
+- Abort terminates the current Docker process
+- If operations still continue, restart the application
+- Check that no orphaned Docker containers are running: `docker ps -a`
+
+## Configuration
+
+### Project Settings (in EEZ Studio)
+- **LVGL Version**: Determines which LVGL library to use
+- **Display Width/Height**: Canvas size for the simulator
+- **Destination Folder**: Where EEZ Studio generates source files (default: `src/ui`)
+- **Flow Support**: Enable/disable flow runtime
+
+### Application Settings
+Automatically saved:
+- Window size and position
+- Panel splitter positions
+- Recent projects list (last 10)
+- Log preferences (timestamps, autoscroll, word wrap)
 
 ## License
 
@@ -144,4 +210,15 @@ MIT License - see [LICENSE](LICENSE) file for details
 
 ## Development
 
-See [DEVELOPMENT.md](DEVELOPMENT.md) for development guidelines and architecture details.
+### Project Architecture
+- **Electron**: Desktop application framework
+- **Docker/Emscripten**: Isolated build environment
+- **Express**: Local test server
+- **IPC Communication**: Secure renderer ↔ main process messaging
+
+### Key Technologies
+- Electron 29+
+- Node.js with async/await
+- Docker Compose with named volumes
+- Emscripten 4.0.20
+- FreeType 2.14.1 (for advanced text rendering)
