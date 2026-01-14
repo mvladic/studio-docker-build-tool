@@ -7,6 +7,7 @@ const express = require('express');
 let mainWindow;
 let testServer = null;
 let currentPort = null;
+let currentDockerProcess = null;
 
 // Single repository for all LVGL versions
 const REPOSITORY_NAME = 'lvgl-simulator-for-studio-docker-build';
@@ -152,6 +153,12 @@ function addToRecentProjects(projectPath) {
   saveRecentProjects();
 }
 
+// Remove project from recent list
+function removeFromRecentProjects(projectPath) {
+  recentProjects = recentProjects.filter(p => p !== projectPath);
+  saveRecentProjects();
+}
+
 // IPC Handlers
 
 // Select project file
@@ -180,6 +187,12 @@ ipcMain.handle('get-recent-projects', async () => {
 // Add to recent projects
 ipcMain.handle('add-to-recent-projects', async (event, projectPath) => {
   addToRecentProjects(projectPath);
+  return { success: true };
+});
+
+// Remove from recent projects
+ipcMain.handle('remove-from-recent-projects', async (event, projectPath) => {
+  removeFromRecentProjects(projectPath);
   return { success: true };
 });
 
@@ -277,6 +290,9 @@ ipcMain.handle('run-docker-command', async (event, command, args, options = {}) 
       env,
       shell: true
     });
+    
+    // Track the current process so it can be aborted
+    currentDockerProcess = dockerProcess;
 
     let output = '';
     let hasError = false;
@@ -315,6 +331,7 @@ ipcMain.handle('run-docker-command', async (event, command, args, options = {}) 
     });
 
     dockerProcess.on('close', (code) => {
+      currentDockerProcess = null;
       resolve({
         success: !hasError && code === 0,
         code,
@@ -763,6 +780,37 @@ ipcMain.handle('check-folder-exists', async (event, folderPath) => {
   }
 });
 
+// Check if file exists
+ipcMain.handle('check-file-exists', async (event, filePath) => {
+  try {
+    const stats = await fs.stat(filePath);
+    return { exists: stats.isFile() };
+  } catch (error) {
+    return { exists: false };
+  }
+});
+
+// Abort current operation
+ipcMain.handle('abort-operation', async () => {
+  if (currentDockerProcess) {
+    try {
+      // Kill the Docker process and its children
+      currentDockerProcess.kill('SIGTERM');
+      // Give it a moment, then force kill if needed
+      setTimeout(() => {
+        if (currentDockerProcess && !currentDockerProcess.killed) {
+          currentDockerProcess.kill('SIGKILL');
+        }
+      }, 1000);
+      currentDockerProcess = null;
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  }
+  return { success: false, error: 'No operation running' };
+});
+
 // Helper functions
 
 async function runDockerCommand(command, args, env, cwd) {
@@ -782,6 +830,9 @@ async function runDockerCommand(command, args, env, cwd) {
       env: { ...process.env, ...env },
       shell: true
     });
+
+    // Track the current process so it can be aborted
+    currentDockerProcess = dockerProcess;
 
     let output = '';
 
@@ -804,6 +855,7 @@ async function runDockerCommand(command, args, env, cwd) {
     });
 
     dockerProcess.on('close', (code) => {
+      currentDockerProcess = null;
       resolve({
         success: code === 0,
         code,
@@ -812,6 +864,7 @@ async function runDockerCommand(command, args, env, cwd) {
     });
 
     dockerProcess.on('error', (error) => {
+      currentDockerProcess = null;
       resolve({
         success: false,
         error: error.message,
@@ -837,6 +890,9 @@ async function runDockerCommandString(commandString, env, cwd) {
       env: { ...process.env, ...env },
       shell: true
     });
+
+    // Track the current process so it can be aborted
+    currentDockerProcess = dockerProcess;
 
     let output = '';
 

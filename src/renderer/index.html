@@ -34,11 +34,25 @@
         <div id="projectInfo" class="project-info" style="display: none;">
           <p><strong>LVGL Version:</strong> <span id="infoLvglVersion"></span></p>
           <p><strong>Flow Support:</strong> <span id="infoFlowSupport"></span></p>
+          <p>
+          <button id="btnReloadProject" class="btn btn-secondary" title="Reload Project File">
+            Reload Project
+          </button>
+          </p>
+          <p>
           <button id="btnOpenInEEZStudio" class="btn btn-secondary" title="Open Project in EEZ Studio">
             Open Project in EEZ Studio
           </button>
+          </p>
+          <p>
           <button id="btnOpenInVSCode" class="btn btn-secondary" style="display: none;" title="Open src/ui in VS Code">
-            Open Generated Source Folder in VS Code
+            Open Generated Source in VS Code
+          </button>
+          </p>
+        </div>
+        <div class="abort-container">
+          <button id="btnAbort" class="btn btn-danger" style="display: none;">
+            Abort
           </button>
         </div>
       </section>

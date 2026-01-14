@@ -6,6 +6,7 @@ let state = {
   buildComplete: false,
   testRunning: false,
   operationRunning: false,
+  abortRequested: false,
   outputPath: null,
   testUrl: null,
   showTimestamps: true,
@@ -24,6 +25,7 @@ const elements = {
   projectInfo: document.getElementById('projectInfo'),
   infoLvglVersion: document.getElementById('infoLvglVersion'),
   infoFlowSupport: document.getElementById('infoFlowSupport'),
+  btnReloadProject: document.getElementById('btnReloadProject'),
   btnOpenInEEZStudio: document.getElementById('btnOpenInEEZStudio'),
   btnOpenInVSCode: document.getElementById('btnOpenInVSCode'),
   
@@ -37,6 +39,7 @@ const elements = {
   btnTest: document.getElementById('btnTest'),
   btnStopTest: document.getElementById('btnStopTest'),
   btnRunAll: document.getElementById('btnRunAll'),
+  btnAbort: document.getElementById('btnAbort'),
   
   tabLogs: document.getElementById('tabLogs'),
   tabPreview: document.getElementById('tabPreview'),
@@ -222,8 +225,10 @@ elements.btnRecentProjects.addEventListener('click', (e) => {
   elements.btnTest.addEventListener('click', runTest);
   elements.btnStopTest.addEventListener('click', stopTest);
   elements.btnRunAll.addEventListener('click', runAll);
+  elements.btnAbort.addEventListener('click', abortOperation);
   
   // Open in VS Code button
+  elements.btnReloadProject.addEventListener('click', reloadProject);
   elements.btnOpenInEEZStudio.addEventListener('click', openInEEZStudio);
   elements.btnOpenInVSCode.addEventListener('click', openInVSCode);
   
@@ -275,6 +280,13 @@ async function selectProjectFile() {
 }
 
 // Open src/ui folder in VS Code
+async function reloadProject() {
+  if (!state.projectPath) return;
+  
+  logMessage('info', `Reloading project file: ${state.projectPath}`);
+  await loadProject(state.projectPath);
+}
+
 async function openInEEZStudio() {
   if (!state.projectPath) return;
   
@@ -290,14 +302,11 @@ async function openInEEZStudio() {
 }
 
 async function openInVSCode() {
-  if (!state.projectPath) return;
+  if (!state.projectInfo || !state.projectInfo.uiDir) return;
   
-  const projectDir = state.projectPath.substring(0, state.projectPath.lastIndexOf('\\'));
-  const srcUiPath = `${projectDir}\\src\\ui`;
+  logMessage('info', `Opening ${state.projectInfo.uiDir} in VS Code...`);
   
-  logMessage('info', `Opening ${srcUiPath} in VS Code...`);
-  
-  const result = await window.electronAPI.openInVSCode(srcUiPath);
+  const result = await window.electronAPI.openInVSCode(state.projectInfo.uiDir);
   
   if (result.success) {
     logMessage('success', 'Opened in VS Code successfully.');
@@ -354,6 +363,11 @@ function closeCombobox() {
 
 // Toggle combobox dropdown
 function toggleRecentProjectsMenu() {
+  // Don't open if button is disabled
+  if (elements.btnRecentProjects.disabled) {
+    return;
+  }
+  
   if (comboboxState.isOpen) {
     closeCombobox();
   } else {
@@ -481,6 +495,22 @@ function renderRecentProjectsMenu() {
 async function loadProject(projectPath) {
   elements.projectPath.value = projectPath;
   
+  // Check if file exists first
+  const fileExistsResult = await window.electronAPI.checkFileExists(projectPath);
+  if (!fileExistsResult.exists) {
+    logMessage('error', `Project file not found: ${projectPath}`);
+    // Remove from recent projects
+    await window.electronAPI.removeFromRecentProjects(projectPath);
+    await loadRecentProjects();
+    
+    state.projectPath = null;
+    state.projectInfo = null;
+    elements.projectInfo.style.display = 'none';
+    elements.btnOpenInVSCode.style.display = 'none';
+    updateUI();
+    return;
+  }
+  
   // Check if it's a different project - if so, reset workflow state
   const isDifferentProject = state.projectPath && state.projectPath !== projectPath;
   
@@ -505,10 +535,9 @@ async function loadProject(projectPath) {
     elements.infoFlowSupport.textContent = result.flowSupport ? 'Yes' : 'No';
     elements.projectInfo.style.display = 'block';
     
-    // Show VS Code button if src/ui folder exists
-    const projectDir = projectPath.substring(0, projectPath.lastIndexOf('\\'));
-    const srcUiPath = `${projectDir}\\src\\ui`;
-    checkSrcUiFolderExists(srcUiPath);
+    // Show VS Code button if destination folder exists
+    // Use uiDir from result which is already resolved from destinationFolder
+    checkSrcUiFolderExists(result.uiDir);
     
     logMessage('success', `Project loaded: LVGL ${result.lvglVersion} (${result.flowSupport ? 'with' : 'no'} flow support)`);
     
@@ -675,6 +704,26 @@ async function runRebuild() {
   await runBuild();
 }
 
+// Abort current operation
+async function abortOperation() {
+  if (!state.operationRunning) return;
+  
+  logMessage('warning', 'Aborting operation...');
+  
+  // Call the main process to kill the Docker process
+  const result = await window.electronAPI.abortOperation();
+  
+  if (result.success) {
+    logMessage('info', 'Operation aborted successfully');
+  } else {
+    logMessage('warning', `Abort signal sent: ${result.error || 'Unknown'}`);
+  }
+  
+  state.operationRunning = false;
+  state.abortRequested = true;
+  updateUI();
+}
+
 // Run all (Setup -> Build -> Test)
 async function runAll() {
   if (!state.projectInfo) return;
@@ -685,6 +734,7 @@ async function runAll() {
   }
   
   state.operationRunning = true;
+  state.abortRequested = false;
   elements.btnRunAll.disabled = true;
   updateUI();
   
@@ -698,6 +748,17 @@ async function runAll() {
   
   const setupResult = await window.electronAPI.setupProject(state.projectInfo);
   
+  // Check if aborted during operation
+  if (state.abortRequested) {
+    logMessage('warning', 'Setup aborted by user');
+    state.setupComplete = false;
+    setStatus('setupStatus', 'error', '✗ Aborted');
+    state.operationRunning = false;
+    state.abortRequested = false;
+    updateUI();
+    return;
+  }
+  
   if (!setupResult.success) {
     logMessage('error', 'Setup failed - aborting Run All');
     state.setupComplete = false;
@@ -710,12 +771,32 @@ async function runAll() {
   state.setupComplete = true;
   setStatus('setupStatus', 'completed', '✓ Complete');
   
+  // Check for abort
+  if (state.abortRequested) {
+    logMessage('warning', 'Run All aborted after Setup');
+    state.operationRunning = false;
+    state.abortRequested = false;
+    updateUI();
+    return;
+  }
+  
   // Step 2: Run Build
   logMessage('info', 'Step 2/3: Running Build...');
   elements.btnBuild.disabled = true;
   setStatus('buildStatus', 'in-progress', 'Building...');
   
   const buildResult = await window.electronAPI.buildProject(state.projectInfo);
+  
+  // Check if aborted during operation
+  if (state.abortRequested) {
+    logMessage('warning', 'Build aborted by user');
+    state.buildComplete = false;
+    setStatus('buildStatus', 'error', '✗ Aborted');
+    state.operationRunning = false;
+    state.abortRequested = false;
+    updateUI();
+    return;
+  }
   
   if (!buildResult.success) {
     logMessage('error', 'Build failed - aborting Run All');
@@ -728,6 +809,15 @@ async function runAll() {
   
   state.buildComplete = true;
   setStatus('buildStatus', 'completed', '✓ Complete');
+  
+  // Check for abort
+  if (state.abortRequested) {
+    logMessage('warning', 'Run All aborted after Build');
+    state.operationRunning = false;
+    state.abortRequested = false;
+    updateUI();
+    return;
+  }
   
   // Step 3: Run Test
   logMessage('info', 'Step 3/3: Starting Test...');
@@ -899,13 +989,22 @@ function updateUI() {
     elements.btnSelectProject.disabled = true;
     elements.btnPaste.disabled = true;
     elements.btnRecentProjects.disabled = true;
+    elements.btnReloadProject.disabled = true;
     elements.btnSetup.disabled = true;
     elements.btnBuild.disabled = true;
     elements.btnRunRebuild.disabled = true;
     elements.btnTest.disabled = true;
     elements.btnRunAll.disabled = true;
+    
+    // Show Abort button when operation is running
+    elements.btnRunAll.style.display = 'none';
+    elements.btnAbort.style.display = 'inline-block';
     return;
   }
+  
+  // Hide Abort button when no operation is running
+  elements.btnAbort.style.display = 'none';
+  elements.btnRunAll.style.display = 'inline-block';
   
   // Disable all buttons if test is running (except Stop Test which is shown instead)
   if (state.testRunning) {
@@ -913,6 +1012,7 @@ function updateUI() {
     elements.btnSelectProject.disabled = true;
     elements.btnPaste.disabled = true;
     elements.btnRecentProjects.disabled = true;
+    elements.btnReloadProject.disabled = true;
     elements.btnSetup.disabled = true;
     elements.btnBuild.disabled = true;
     elements.btnRunRebuild.disabled = true;
@@ -926,6 +1026,7 @@ function updateUI() {
   elements.btnSelectProject.disabled = false;
   elements.btnRecentProjects.disabled = false;
   // btnPaste is controlled by clipboard check interval
+  elements.btnReloadProject.disabled = !state.projectInfo;
   elements.btnSetup.disabled = !state.projectInfo;
   elements.btnBuild.disabled = !state.setupComplete;
   elements.btnRunRebuild.disabled = !state.setupComplete;
