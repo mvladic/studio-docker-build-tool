@@ -234,7 +234,7 @@ ipcMain.handle('read-project-file', async (event, projectPath) => {
     const content = await fs.readFile(projectPath, 'utf8');
     const project = JSON.parse(content);
     
-    const lvglVersion = project.settings?.general?.lvglVersion;
+    let lvglVersion = project.settings?.general?.lvglVersion;
     const flowSupport = project.settings?.general?.flowSupport || false;
     const displayWidth = project.settings?.general?.displayWidth || 800;
     const displayHeight = project.settings?.general?.displayHeight || 480;
@@ -242,6 +242,22 @@ ipcMain.handle('read-project-file', async (event, projectPath) => {
     
     if (!lvglVersion) {
       throw new Error('LVGL version not specified in project settings');
+    }
+    
+    // Map unsupported versions to supported ones
+    const versionMap = {
+      '8.3': '8.4.0',
+      '8.3.0': '8.4.0',
+      '9.0': '9.2.2',
+      '9.0.0': '9.2.2'
+    };
+    
+    if (versionMap[lvglVersion]) {
+      mainWindow.webContents.send('log-message', { 
+        type: 'info', 
+        text: `LVGL version ${lvglVersion} mapped to ${versionMap[lvglVersion]}\n` 
+      });
+      lvglVersion = versionMap[lvglVersion];
     }
     
     const projectDir = path.dirname(projectPath);
