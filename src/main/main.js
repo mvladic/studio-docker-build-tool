@@ -10,13 +10,9 @@ let fileWatcher = null;
 let testServer = null;
 let currentPort = null;
 
-// Project mappings
-const PROJECT_MAPPINGS = {
-  '8.4.0': { false: 'v840-no-flow', true: 'v840-with-flow' },
-  '9.2.2': { false: 'v922-no-flow', true: 'v922-with-flow' },
-  '9.3.0': { false: 'v930-no-flow', true: 'v930-with-flow' },
-  '9.4.0': { false: 'v940-no-flow', true: 'v940-with-flow' }
-};
+// Single repository for all LVGL versions
+const REPOSITORY_NAME = 'lvgl-simulator-for-studio-docker-build';
+const DOCKER_VOLUME_NAME = 'lvgl-simulator';
 
 // Store recent projects
 const RECENT_PROJECTS_FILE = path.join(app.getPath('userData'), 'recent-projects.json');
@@ -25,7 +21,7 @@ let recentProjects = [];
 
 // Current project state
 let currentProjectPath = null;
-let currentProjectName = null;
+let currentProjectInfo = null;
 
 // Load window state
 async function loadWindowState() {
@@ -115,7 +111,8 @@ function shouldFilterDockerMessage(text) {
     'Found orphan containers',
     'Container docker-build-emscripten-build-run-',
     'Container ID:',
-    '--remove-orphans flag'
+    '--remove-orphans flag',
+    'cache:INFO'
   ];
   
   // Check string filters
@@ -229,12 +226,13 @@ ipcMain.handle('read-project-file', async (event, projectPath) => {
     
     const lvglVersion = project.settings?.general?.lvglVersion;
     const flowSupport = project.settings?.general?.flowSupport || false;
+    const displayWidth = project.settings?.general?.displayWidth || 800;
+    const displayHeight = project.settings?.general?.displayHeight || 480;
     
-    if (!PROJECT_MAPPINGS[lvglVersion]) {
-      throw new Error(`Unsupported LVGL version: ${lvglVersion}`);
+    if (!lvglVersion) {
+      throw new Error('LVGL version not specified in project settings');
     }
     
-    const projectName = PROJECT_MAPPINGS[lvglVersion][flowSupport];
     const projectDir = path.dirname(projectPath);
     const uiDir = path.join(projectDir, 'src', 'ui');
     
@@ -248,16 +246,17 @@ ipcMain.handle('read-project-file', async (event, projectPath) => {
     // Start file watcher immediately when project is loaded
     startFileWatcher(projectPath, uiDir);
     
-    // Check if build files already exist
-    const buildStatus = await checkBuildStatus(projectName);
+    // Check if build files already exist (using single volume)
+    const buildStatus = await checkBuildStatus(DOCKER_VOLUME_NAME);
     
     return {
       success: true,
       lvglVersion,
       flowSupport,
-      projectName,
       projectDir,
       uiDir,
+      displayWidth,
+      displayHeight,
       setupComplete: buildStatus.setupComplete,
       buildComplete: buildStatus.buildComplete
     };
@@ -332,10 +331,10 @@ ipcMain.handle('setup-project', async (event, projectInfo) => {
   const startTime = Date.now();
   try {
     currentProjectPath = projectInfo.projectPath;
-    currentProjectName = projectInfo.projectName;
+    currentProjectInfo = projectInfo;
     
     const dockerPath = path.join(__dirname, '../../docker-build');
-    const env = { PROJECT_VOLUME: projectInfo.projectName };
+    const env = { PROJECT_VOLUME: DOCKER_VOLUME_NAME };
     
     // Step 1: Build Docker image
     mainWindow.webContents.send('log-message', { type: 'info', text: 'Building Docker image...\n' });
@@ -346,10 +345,12 @@ ipcMain.handle('setup-project', async (event, projectInfo) => {
     mainWindow.webContents.send('log-message', { type: 'info', text: 'Checking if project is already set up...\n' });
     result = await runDockerCommand('docker-compose', [
       'run', '--rm', 'emscripten-build',
-      'test', '-f', '/project/CMakeLists.txt'
+      'test', '-f', '/project/build.sh'
     ], env, dockerPath);
     
     const projectAlreadySetup = result.success;
+    
+    let containerId;
     
     if (!projectAlreadySetup) {
       // Step 3: Clone repository using script (only on first setup)
@@ -358,47 +359,17 @@ ipcMain.handle('setup-project', async (event, projectInfo) => {
         text: `First-time setup: Cloning repository from GitHub...\n` 
       });
       
-      // Copy clone script to container and run it
-      const containerId = await createTempContainer(env, dockerPath);
-      const cloneShPath = path.join(dockerPath, 'clone.sh');
-      
-      await runDockerCommand('docker', ['cp', cloneShPath, `${containerId}:/tmp/clone.sh`], env, dockerPath);
+      // Create temp container that will be reused for file operations
+      containerId = await createTempContainer(env, dockerPath);
       
       result = await runDockerCommand('docker', [
         'exec', containerId,
-        'bash', '/tmp/clone.sh', `https://github.com/mvladic/${projectInfo.projectName}`
-      ], env, dockerPath);
-      
-      await runDockerCommand('docker', ['stop', containerId], env, dockerPath);
-      
-      if (!result.success) throw new Error('Git clone failed');
-      
-      // Verify clone was successful by checking for CMakeLists.txt
-      mainWindow.webContents.send('log-message', { type: 'info', text: 'Verifying clone...\n' });
-      result = await runDockerCommand('docker-compose', [
-        'run', '--rm', 'emscripten-build',
-        'test', '-f', '/project/CMakeLists.txt'
-      ], env, dockerPath);
-      
-      if (!result.success) throw new Error('Clone verification failed - CMakeLists.txt not found');
-      
-      // Verify .git directory was copied
-      mainWindow.webContents.send('log-message', { type: 'info', text: 'Verifying git repository...\n' });
-      result = await runDockerCommand('docker-compose', [
-        'run', '--rm', 'emscripten-build',
-        'test', '-f', '/project/.git/HEAD'
+        'sh', '-c', `"cd /project && git clone --recursive https://github.com/mvladic/${REPOSITORY_NAME} ."`
       ], env, dockerPath);
       
       if (!result.success) {
-        mainWindow.webContents.send('log-message', { 
-          type: 'warning', 
-          text: 'Warning: .git directory not found. Git pull will not work for this volume.\n' 
-        });
-      } else {
-        mainWindow.webContents.send('log-message', { 
-          type: 'success', 
-          text: 'Git repository verified successfully\n' 
-        });
+        await runDockerCommand('docker', ['stop', containerId], env, dockerPath);
+        throw new Error('Git clone failed');
       }
       
       mainWindow.webContents.send('log-message', { 
@@ -411,60 +382,42 @@ ipcMain.handle('setup-project', async (event, projectInfo) => {
         text: 'Project already exists in Docker volume. Checking for updates...\n' 
       });
       
-      // Check if it's a valid git repository by checking for .git/HEAD
-      const gitCheckResult = await runDockerCommand('docker-compose', [
+      // Pull latest changes from GitHub
+      mainWindow.webContents.send('log-message', { 
+        type: 'info', 
+        text: 'Pulling latest changes from GitHub...\n' 
+      });
+        
+      result = await runDockerCommand('docker-compose', [
         'run', '--rm', 'emscripten-build',
-        'test', '-f', '/project/.git/HEAD'
+        'sh', '-c', '"cd /project && git pull"'
       ], env, dockerPath);
-      
-      if (gitCheckResult.success) {
-        // Pull latest changes from GitHub
+        
+      if (!result.success) {
         mainWindow.webContents.send('log-message', { 
-          type: 'info', 
-          text: 'Pulling latest changes from GitHub...\n' 
+          type: 'warning', 
+          text: 'Git pull failed, continuing with existing code...\n' 
         });
-        
-        result = await runDockerCommand('docker-compose', [
-          'run', '--rm', 'emscripten-build',
-          'sh', '-c', '"cd /project && git pull && git submodule update --init --recursive"'
-        ], env, dockerPath);
-        
-        if (!result.success) {
-          mainWindow.webContents.send('log-message', { 
-            type: 'warning', 
-            text: 'Git pull failed, continuing with existing code...\n' 
-          });
-        } else {
-          mainWindow.webContents.send('log-message', { 
-            type: 'success', 
-            text: 'Latest changes pulled successfully\n' 
-          });
-        }
       } else {
         mainWindow.webContents.send('log-message', { 
-          type: 'info', 
-          text: 'No valid git repository found (project set up with older version). To enable automatic updates, delete this Docker volume and run Setup again.\n' 
+          type: 'success', 
+          text: 'Latest changes pulled successfully\n' 
         });
       }
     }
     
-    // Step 4 & 5: Update build.sh and src/ui in a single container (optimization)
-    mainWindow.webContents.send('log-message', { type: 'info', text: 'Updating build script and src/ui files...\n' });
-    const containerId = await createTempContainer(env, dockerPath);
-    mainWindow.webContents.send('log-message', { type: 'info', text: `Container ID: ${containerId}\n` });
-    
-    // Copy build.sh
-    const buildShPath = path.join(dockerPath, 'build.sh');
-    result = await runDockerCommand('docker', ['cp', buildShPath, `${containerId}:/project/build.sh`], env, dockerPath);
-    if (!result.success) {
-      await runDockerCommand('docker', ['stop', containerId], env, dockerPath);
-      throw new Error('Failed to copy build script');
+    // Step 4: Update src/ui (reuse container from clone if first-time setup)
+    mainWindow.webContents.send('log-message', { type: 'info', text: 'Updating src/ui files...\n' });
+    if (!containerId) {
+      // Create container only if we didn't create one for cloning
+      containerId = await createTempContainer(env, dockerPath);
     }
     
-    // Remove existing src/ui
+    // Remove and recreate src directory in one command
+    mainWindow.webContents.send('log-message', { type: 'info', text: 'Preparing src directory...\n' });
     await runDockerCommand('docker', [
       'exec', containerId,
-      'rm', '-rf', '/project/src/ui'
+      'sh', '-c', '"rm -rf /project/src && mkdir -p /project/src"'
     ], env, dockerPath);
     
     // Copy src/ui directory - verify path exists first
@@ -502,30 +455,6 @@ ipcMain.handle('setup-project', async (event, projectInfo) => {
       'find', '/project/src/ui', '-type', 'f', '-exec', 'touch', '{}', '+'
     ], env, dockerPath);
     
-    // Step 6: Copy modified lv_conf.h if it exists
-    const lvConfDir = path.join(app.getPath('userData'), 'lv_conf');
-    const lvConfPath = path.join(lvConfDir, `${projectInfo.projectName}.h`);
-    
-    try {
-      await fs.access(lvConfPath);
-      mainWindow.webContents.send('log-message', { type: 'info', text: 'Copying modified lv_conf.h...\n' });
-      
-      result = await runDockerCommand('docker', [
-        'cp',
-        lvConfPath,
-        `${containerId}:/project/lv_conf.h`
-      ], env, dockerPath);
-      
-      if (result.success) {
-        mainWindow.webContents.send('log-message', { type: 'success', text: 'Modified lv_conf.h copied successfully\n' });
-      } else {
-        mainWindow.webContents.send('log-message', { type: 'warning', text: 'Failed to copy modified lv_conf.h, using default\n' });
-      }
-    } catch (error) {
-      // File doesn't exist, use default from repository
-      mainWindow.webContents.send('log-message', { type: 'info', text: 'Using default lv_conf.h from repository\n' });
-    }
-    
     // Stop container
     await runDockerCommand('docker', ['stop', containerId], env, dockerPath);
     
@@ -542,17 +471,20 @@ ipcMain.handle('setup-project', async (event, projectInfo) => {
 });
 
 // Build project
-ipcMain.handle('build-project', async (event, projectName) => {
+ipcMain.handle('build-project', async (event, projectInfo) => {
   const startTime = Date.now();
   try {
     const dockerPath = path.join(__dirname, '../../docker-build');
-    const env = { PROJECT_VOLUME: projectName };
+    const env = { PROJECT_VOLUME: DOCKER_VOLUME_NAME };
     
-    mainWindow.webContents.send('log-message', { type: 'info', text: `Starting build for project: ${projectName}\n` });
+    mainWindow.webContents.send('log-message', { type: 'info', text: `Starting build (LVGL ${projectInfo.lvglVersion}, ${projectInfo.displayWidth}x${projectInfo.displayHeight})...\n` });
+    
+    // Use the build.sh script with parameters
+    const buildCommand = `./build.sh --lvgl=${projectInfo.lvglVersion} --display-width=${projectInfo.displayWidth} --display-height=${projectInfo.displayHeight}`;
     
     const result = await runDockerCommand('docker-compose', [
       'run', '--rm', 'emscripten-build',
-      'bash', 'build.sh'
+      'sh', '-c', `"${buildCommand}"`
     ], env, dockerPath);
     
     if (result.success) {
@@ -570,11 +502,11 @@ ipcMain.handle('build-project', async (event, projectName) => {
 });
 
 // Clean build directory
-ipcMain.handle('clean-build', async (event, projectName) => {
+ipcMain.handle('clean-build', async (event) => {
   const startTime = Date.now();
   try {
     const dockerPath = path.join(__dirname, '../../docker-build');
-    const env = { PROJECT_VOLUME: projectName };
+    const env = { PROJECT_VOLUME: DOCKER_VOLUME_NAME };
     
     mainWindow.webContents.send('log-message', { type: 'info', text: 'Removing build directory...\n' });
     
@@ -598,11 +530,12 @@ ipcMain.handle('clean-build', async (event, projectName) => {
 });
 
 // Extract build output
-ipcMain.handle('extract-build', async (event, projectName) => {
+ipcMain.handle('extract-build', async (event) => {
+  const startTime = Date.now();
   try {
     const dockerPath = path.join(__dirname, '../../docker-build');
     const outputPath = path.join(dockerPath, 'output');
-    const env = { PROJECT_VOLUME: projectName };
+    const env = { PROJECT_VOLUME: DOCKER_VOLUME_NAME };
     
     mainWindow.webContents.send('log-message', { type: 'info', text: `Output path: ${outputPath}\n` });
     
@@ -618,7 +551,7 @@ ipcMain.handle('extract-build', async (event, projectName) => {
     // Create fresh output directory
     await fs.mkdir(outputPath, { recursive: true });
     
-    mainWindow.webContents.send('log-message', { type: 'info', text: `Extracting build files from volume: ${projectName}\n` });
+    mainWindow.webContents.send('log-message', { type: 'info', text: 'Extracting build files from Docker volume...\n' });
     
     // Create temp container and copy files
     const containerId = await createTempContainer(env, dockerPath);
@@ -663,7 +596,8 @@ ipcMain.handle('extract-build', async (event, projectName) => {
     
     await runDockerCommand('docker', ['stop', containerId], env, dockerPath);
     
-    mainWindow.webContents.send('log-message', { type: 'success', text: 'Build files extracted successfully!\n' });
+    const duration = ((Date.now() - startTime) / 1000).toFixed(1);
+    mainWindow.webContents.send('log-message', { type: 'success', text: `Build files extracted successfully in ${duration}s!\n` });
     return { success: true, outputPath };
     
   } catch (error) {
@@ -809,160 +743,6 @@ ipcMain.handle('check-folder-exists', async (event, folderPath) => {
     return { exists: stats.isDirectory() };
   } catch (error) {
     return { exists: false };
-  }
-});
-
-// Save modified lv_conf.h
-ipcMain.handle('save-lv-conf', async (event, projectName, content) => {
-  try {
-    const lvConfDir = path.join(app.getPath('userData'), 'lv_conf');
-    await fs.mkdir(lvConfDir, { recursive: true });
-    
-    const filePath = path.join(lvConfDir, `${projectName}.h`);
-    await fs.writeFile(filePath, content, 'utf8');
-    
-    return { success: true };
-  } catch (error) {
-    return { success: false, error: error.message };
-  }
-});
-
-// Load saved lv_conf.h
-ipcMain.handle('load-saved-lv-conf', async (event, projectName) => {
-  try {
-    const lvConfDir = path.join(app.getPath('userData'), 'lv_conf');
-    const filePath = path.join(lvConfDir, `${projectName}.h`);
-    
-    const content = await fs.readFile(filePath, 'utf8');
-    
-    // If file is empty or doesn't exist, return failure so GitHub version is loaded
-    if (!content || content.trim().length === 0) {
-      return { success: false, error: 'Saved file is empty' };
-    }
-    
-    return { success: true, content };
-  } catch (error) {
-    return { success: false, error: error.message };
-  }
-});
-
-// Copy lv_conf.h to Docker volume
-ipcMain.handle('copy-lv-conf-to-docker', async (event, projectName, content) => {
-  try {
-    const dockerPath = path.join(__dirname, '../../docker-build');
-    const env = { PROJECT_VOLUME: projectName };
-    const tempFile = path.join(app.getPath('temp'), 'lv_conf_temp.h');
-    
-    // Write content to temp file
-    await fs.writeFile(tempFile, content, 'utf8');
-    
-    // Create temp container
-    const containerId = await createTempContainer(env, dockerPath);
-    
-    // Copy file to container
-    const result = await runDockerCommand('docker', [
-      'cp',
-      tempFile,
-      `${containerId}:/project/lv_conf.h`
-    ], env, dockerPath);
-    
-    // Stop container
-    await runDockerCommand('docker', ['stop', containerId], env, dockerPath);
-    
-    // Clean up temp file
-    await fs.unlink(tempFile);
-    
-    if (result.success) {
-      return { success: true };
-    } else {
-      throw new Error('Failed to copy lv_conf.h to Docker volume');
-    }
-  } catch (error) {
-    return { success: false, error: error.message };
-  }
-});
-
-// Get lv_conf.h file from GitHub
-ipcMain.handle('get-lv-conf-file', async (event, projectName) => {
-  try {
-    // Fetch from GitHub raw content
-    const url = `https://raw.githubusercontent.com/mvladic/${projectName}/master/lv_conf.h`;
-    
-    const https = require('https');
-    
-    return new Promise((resolve) => {
-      https.get(url, (res) => {
-        let data = '';
-        
-        res.on('data', (chunk) => {
-          data += chunk;
-        });
-        
-        res.on('end', () => {
-          if (res.statusCode === 200) {
-            resolve({ success: true, content: data });
-          } else if (res.statusCode === 404) {
-            // Try 'main' branch instead of 'master'
-            const urlMain = `https://raw.githubusercontent.com/mvladic/${projectName}/main/lv_conf.h`;
-            https.get(urlMain, (res2) => {
-              let data2 = '';
-              
-              res2.on('data', (chunk) => {
-                data2 += chunk;
-              });
-              
-              res2.on('end', () => {
-                if (res2.statusCode === 200) {
-                  resolve({ success: true, content: data2 });
-                } else {
-                  resolve({ success: false, error: 'lv_conf.h not found in repository' });
-                }
-              });
-            }).on('error', (err) => {
-              resolve({ success: false, error: err.message });
-            });
-          } else {
-            resolve({ success: false, error: `HTTP ${res.statusCode}` });
-          }
-        });
-      }).on('error', (err) => {
-        resolve({ success: false, error: err.message });
-      });
-    });
-  } catch (error) {
-    return { success: false, error: error.message };
-  }
-});
-
-// Get lv_conf_template.h from official LVGL repository
-ipcMain.handle('get-lv-conf-template', async (event, lvglVersion) => {
-  try {
-    // Fetch from official LVGL GitHub repository
-    const url = `https://raw.githubusercontent.com/lvgl/lvgl/v${lvglVersion}/lv_conf_template.h`;
-    
-    const https = require('https');
-    
-    return new Promise((resolve) => {
-      https.get(url, (res) => {
-        let data = '';
-        
-        res.on('data', (chunk) => {
-          data += chunk;
-        });
-        
-        res.on('end', () => {
-          if (res.statusCode === 200) {
-            resolve({ success: true, content: data });
-          } else {
-            resolve({ success: false, error: `lv_conf_template.h not found for LVGL v${lvglVersion}` });
-          }
-        });
-      }).on('error', (err) => {
-        resolve({ success: false, error: err.message });
-      });
-    });
-  } catch (error) {
-    return { success: false, error: error.message };
   }
 });
 

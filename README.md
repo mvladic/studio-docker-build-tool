@@ -93,7 +93,6 @@ docker-build/
   Dockerfile         # Docker environment setup
   docker-compose.yml # Docker services with named volumes
   build.sh           # Emscripten build script
-  clone.sh           # Git repository cloning
 assets/
   icon.png           # Application icon (Linux)
   icon.ico           # Application icon (Windows)

@@ -5,7 +5,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>EEZ Studio Docker Build Tool</title>
   <link rel="stylesheet" href="styles.css">
-  <script src="https://unpkg.com/monaco-editor@0.45.0/min/vs/loader.js"></script>
 </head>
 <body>
   <div class="app-container">
@@ -20,18 +19,21 @@
         <h2>Project</h2>
         <div class="form-group">
           <label>EEZ Project File:</label>
-          <div class="file-selector">
-            <input type="text" id="projectPath" placeholder="Select .eez-project file or paste path here">
-            <button id="btnRecentProjects" class="btn btn-secondary" title="Recent Projects">▼</button>
-            <button id="btnPaste" class="btn btn-secondary" title="Paste from clipboard" disabled>📋</button>
-            <button id="btnSelectProject" class="btn btn-secondary" title="Browse for file">📁</button>
+          <div class="combobox-container">
+            <div class="combobox-input-wrapper">
+              <input type="text" id="projectPath" placeholder="Select .eez-project file or paste path here" autocomplete="off">
+              <button id="btnRecentProjects" class="combobox-toggle" title="Recent Projects">▼</button>
+            </div>
+            <div id="recentProjectsMenu" class="combobox-dropdown" style="display: none;"></div>
           </div>
-          <div id="recentProjectsMenu" class="recent-menu" style="display: none;"></div>
+          <div class="file-actions">
+            <button id="btnPaste" class="btn btn-secondary" title="Paste from clipboard" disabled>📋 Paste</button>
+            <button id="btnSelectProject" class="btn btn-secondary" title="Browse for file">📁 Browse</button>
+          </div>
         </div>
         <div id="projectInfo" class="project-info" style="display: none;">
           <p><strong>LVGL Version:</strong> <span id="infoLvglVersion"></span></p>
           <p><strong>Flow Support:</strong> <span id="infoFlowSupport"></span></p>
-          <p><strong>Docker Project:</strong> <span id="infoProjectName"></span></p>
           <button id="btnOpenInVSCode" class="btn btn-secondary" style="display: none;" title="Open src/ui in VS Code">
             Open src/ui in VS Code
           </button>
@@ -113,7 +115,6 @@
       <!-- Tab Navigation -->
       <div class="tab-nav">
         <button id="tabLogs" class="tab-button active">Logs</button>
-        <button id="tabLvConf" class="tab-button" style="display: none;">lv_conf.h</button>
         <button id="tabPreview" class="tab-button" style="display: none;">Preview</button>
       </div>
 
@@ -133,21 +134,6 @@
         <div id="logContainer" class="log-container">
           <div id="logOutput" class="log-output"></div>
         </div>
-      </div>
-
-      <!-- lv_conf.h Tab -->
-      <div id="tabContentLvConf" class="tab-content" style="display: none;">
-        <div class="code-toolbar">
-          <span class="toolbar-label">lv_conf.h</span>
-          <span id="lvConfModifiedIndicator" class="modified-indicator" style="display: none;">● Modified</span>
-          <button id="btnShowDiff" class="btn btn-small" style="display: none;" title="Show Diff">🔍 Show Diff</button>
-          <button id="btnCompareTemplate" class="btn btn-small" title="Compare with lv_conf_template.h">📄 Compare with Template</button>
-          <button id="btnSaveLvConf" class="btn btn-small" style="display: none;" title="Save">💾 Save</button>
-          <button id="btnRevertLvConf" class="btn btn-small" style="display: none;" title="Revert to GitHub version">↶ Revert</button>
-          <button id="btnCopyLvConf" class="btn btn-small" title="Copy to Clipboard">📋</button>
-          <button id="btnRefreshLvConf" class="btn btn-small" title="Refresh">🔄</button>
-        </div>
-        <div id="lvConfContainer" class="monaco-container"></div>
       </div>
 
       <!-- Preview + Console Tab -->
