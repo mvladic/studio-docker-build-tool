@@ -11,7 +11,6 @@ let state = {
   showTimestamps: true,
   autoScroll: true,
   wordWrap: true,
-  fileChangedSinceSetup: false,
   recentProjects: []
 };
 
@@ -25,6 +24,7 @@ const elements = {
   projectInfo: document.getElementById('projectInfo'),
   infoLvglVersion: document.getElementById('infoLvglVersion'),
   infoFlowSupport: document.getElementById('infoFlowSupport'),
+  btnOpenInEEZStudio: document.getElementById('btnOpenInEEZStudio'),
   btnOpenInVSCode: document.getElementById('btnOpenInVSCode'),
   
   setupStatus: document.getElementById('setupStatus'),
@@ -42,10 +42,6 @@ const elements = {
   tabPreview: document.getElementById('tabPreview'),
   tabContentLogs: document.getElementById('tabContentLogs'),
   tabContentPreview: document.getElementById('tabContentPreview'),
-  
-  fileChangeNotification: document.getElementById('fileChangeNotification'),
-  btnRebuild: document.getElementById('btnRebuild'),
-  btnDismiss: document.getElementById('btnDismiss'),
   
   logOutput: document.getElementById('logOutput'),
   logContainer: document.getElementById('logContainer'),
@@ -228,29 +224,12 @@ elements.btnRecentProjects.addEventListener('click', (e) => {
   elements.btnRunAll.addEventListener('click', runAll);
   
   // Open in VS Code button
+  elements.btnOpenInEEZStudio.addEventListener('click', openInEEZStudio);
   elements.btnOpenInVSCode.addEventListener('click', openInVSCode);
   
   // Tab switching
   elements.tabLogs.addEventListener('click', () => switchTab('logs'));
   elements.tabPreview.addEventListener('click', () => switchTab('preview'));
-  
-  // File change notification
-  elements.btnRebuild.addEventListener('click', async () => {
-    // Stop test if running
-    if (state.testRunning) {
-      await stopTest();
-    }
-    
-    elements.fileChangeNotification.style.display = 'none';
-    state.fileChangedSinceSetup = false;
-    
-    // Run full sequence: Setup -> Build -> Test
-    await runAll();
-  });
-  elements.btnDismiss.addEventListener('click', () => {
-    elements.fileChangeNotification.style.display = 'none';
-    state.fileChangedSinceSetup = false;
-  });
   
   // Log toolbar
   elements.btnCopyLog.addEventListener('click', copyLogToClipboard);
@@ -283,30 +262,6 @@ function setupIPCListeners() {
       appendConsoleMessage(event.data.level, event.data.message);
     }
   });
-  
-  // File changed
-  window.electronAPI.onFileChanged((data) => {
-    // Check if it's the .eez-project file that changed
-    if (data.path === state.projectPath) {
-      logMessage('info', `Project file changed, reloading...`);
-      const wasSetupComplete = state.setupComplete;
-      // Automatically reload the project to detect LVGL version changes
-      loadProject(state.projectPath);
-      // If setup was complete before, show rebuild notification
-      if (wasSetupComplete) {
-        state.fileChangedSinceSetup = true;
-        elements.fileChangeNotification.style.display = 'flex';
-      }
-      return;
-    }
-    
-    // For build destination files
-    if (state.setupComplete && !state.fileChangedSinceSetup) {
-      state.fileChangedSinceSetup = true;
-      elements.fileChangeNotification.style.display = 'flex';
-      logMessage('info', `File changed: ${data.path}`);
-    }
-  });
 }
 
 // Select project file
@@ -320,6 +275,20 @@ async function selectProjectFile() {
 }
 
 // Open src/ui folder in VS Code
+async function openInEEZStudio() {
+  if (!state.projectPath) return;
+  
+  logMessage('info', `Opening project in EEZ Studio...`);
+  
+  const result = await window.electronAPI.openInEEZStudio(state.projectPath);
+  
+  if (result.success) {
+    logMessage('success', 'Opened in EEZ Studio successfully.');
+  } else {
+    logMessage('error', `Failed to open in EEZ Studio: ${result.error}`);
+  }
+}
+
 async function openInVSCode() {
   if (!state.projectPath) return;
   
@@ -555,8 +524,6 @@ async function loadProject(projectPath) {
       state.setupComplete = false;
       state.buildComplete = false;
       state.testRunning = false;
-      state.fileChangedSinceSetup = false;
-      elements.fileChangeNotification.style.display = 'none';
       
       // Reset status indicators
       setStatus('setupStatus', 'pending', '');
@@ -567,8 +534,6 @@ async function loadProject(projectPath) {
       state.setupComplete = result.setupComplete || false;
       state.buildComplete = result.buildComplete || false;
       state.testRunning = false;
-      state.fileChangedSinceSetup = false;
-      elements.fileChangeNotification.style.display = 'none';
       
       // Update status indicators
       if (state.setupComplete) {
@@ -632,8 +597,6 @@ async function runSetup() {
     state.setupComplete = true;
     state.buildComplete = false;
     state.testRunning = false;
-    state.fileChangedSinceSetup = false;
-    elements.fileChangeNotification.style.display = 'none';
     setStatus('setupStatus', 'completed', '✓ Complete');
     setStatus('buildStatus', 'pending', '');
     setStatus('testStatus', 'pending', '');
@@ -745,8 +708,6 @@ async function runAll() {
   }
   
   state.setupComplete = true;
-  state.fileChangedSinceSetup = false;
-  elements.fileChangeNotification.style.display = 'none';
   setStatus('setupStatus', 'completed', '✓ Complete');
   
   // Step 2: Run Build

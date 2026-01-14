@@ -12,6 +12,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   extractBuild: () => ipcRenderer.invoke('extract-build'),
   startTestServer: (outputPath) => ipcRenderer.invoke('start-test-server', outputPath),
   stopTestServer: () => ipcRenderer.invoke('stop-test-server'),
+  openInEEZStudio: (projectPath) => ipcRenderer.invoke('open-in-eez-studio', projectPath),
   openInVSCode: (folderPath) => ipcRenderer.invoke('open-in-vscode', folderPath),
   checkFolderExists: (folderPath) => ipcRenderer.invoke('check-folder-exists', folderPath),
   
@@ -21,8 +22,5 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   onLogMessage: (callback) => {
     ipcRenderer.on('log-message', (event, data) => callback(data));
-  },
-  onFileChanged: (callback) => {
-    ipcRenderer.on('file-changed', (event, data) => callback(data));
   }
 });

@@ -2,11 +2,9 @@ const { app, BrowserWindow, ipcMain, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs').promises;
 const { spawn } = require('child_process');
-const chokidar = require('chokidar');
 const express = require('express');
 
 let mainWindow;
-let fileWatcher = null;
 let testServer = null;
 let currentPort = null;
 
@@ -98,7 +96,6 @@ app.whenReady().then(async () => {
 });
 
 app.on('window-all-closed', () => {
-  stopFileWatcher();
   stopTestServer();
   if (process.platform !== 'darwin') {
     app.quit();
@@ -245,9 +242,6 @@ ipcMain.handle('read-project-file', async (event, projectPath) => {
     } catch {
       throw new Error(`Build destination directory not found at: ${uiDir}`);
     }
-    
-    // Start file watcher immediately when project is loaded
-    startFileWatcher(projectPath, uiDir);
     
     // Check if build files already exist (using single volume)
     const buildStatus = await checkBuildStatus(DOCKER_VOLUME_NAME);
@@ -441,10 +435,9 @@ ipcMain.handle('setup-project', async (event, projectInfo) => {
     const resolvedUiDir = path.resolve(projectInfo.uiDir);
     mainWindow.webContents.send('log-message', { type: 'info', text: `Copying ${resolvedUiDir} to container...\n` });
     
-    // Docker path is always /project/src/ui regardless of local destinationFolder
-    // For paths with spaces, we need to pass the command as a string instead of array
-    // when using shell: true
-    const cpCommand = `docker cp "${resolvedUiDir}" ${containerId}:/project/src/`;
+    // Copy contents of destination folder directly into /project/src/
+    // Using /. at the end copies the contents, not the folder itself
+    const cpCommand = `docker cp "${resolvedUiDir}/." ${containerId}:/project/src/`;
     mainWindow.webContents.send('log-message', { type: 'info', text: `Running: ${cpCommand}\n` });
     
     result = await runDockerCommandString(cpCommand, env, dockerPath);
@@ -455,10 +448,9 @@ ipcMain.handle('setup-project', async (event, projectInfo) => {
     }
     
     // Update timestamps to ensure CMake detects changes
-    // Docker path is always /project/src/ui regardless of local destinationFolder
     await runDockerCommand('docker', [
       'exec', containerId,
-      'find', '/project/src/ui', '-type', 'f', '-exec', 'touch', '{}', '+'
+      'find', '/project/src', '-type', 'f', '-name', '*.c', '-o', '-name', '*.h', '-exec', 'touch', '{}', '+'
     ], env, dockerPath);
     
     // Stop container
@@ -721,6 +713,25 @@ ipcMain.handle('stop-test-server', async () => {
 });
 
 // Open folder in VS Code
+ipcMain.handle('open-in-eez-studio', async (event, projectPath) => {
+  try {
+    const { shell } = require('electron');
+    
+    // Use shell.openPath to open the file with the default application
+    // EEZ Studio should be registered as the handler for .eez-project files
+    const result = await shell.openPath(projectPath);
+    
+    if (result) {
+      // If result is non-empty, it means there was an error
+      return { success: false, error: result };
+    }
+    
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
 ipcMain.handle('open-in-vscode', async (event, folderPath) => {
   try {
     const { exec } = require('child_process');
@@ -960,49 +971,4 @@ async function runDockerCommandSilent(command, args, env, cwd) {
       });
     });
   });
-}
-
-function startFileWatcher(projectPath, uiDir) {
-  stopFileWatcher();
-  
-  const watchPaths = [projectPath, uiDir];
-  
-  fileWatcher = chokidar.watch(watchPaths, {
-    persistent: true,
-    ignoreInitial: true
-  });
-  
-  fileWatcher.on('change', (path) => {
-    if (mainWindow) {
-      if (path.endsWith('.eez-project')) {
-        mainWindow.webContents.send('log-message', { type: 'info', text: `Project file changed: ${path}\n` });
-      }
-      mainWindow.webContents.send('file-changed', { path });
-    }
-  });
-  
-  fileWatcher.on('add', (path) => {
-    if (mainWindow) {
-      if (path.endsWith('.eez-project')) {
-        mainWindow.webContents.send('log-message', { type: 'info', text: `Project file added: ${path}\n` });
-      }
-      mainWindow.webContents.send('file-changed', { path });
-    }
-  });
-  
-  fileWatcher.on('unlink', (path) => {
-    if (mainWindow) {
-      if (path.endsWith('.eez-project')) {
-        mainWindow.webContents.send('log-message', { type: 'info', text: `Project file removed: ${path}\n` });
-      }
-      mainWindow.webContents.send('file-changed', { path });
-    }
-  });
-}
-
-function stopFileWatcher() {
-  if (fileWatcher) {
-    fileWatcher.close();
-    fileWatcher = null;
-  }
 }

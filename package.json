@@ -25,7 +25,6 @@
     "png2icons": "^2.0.1"
   },
   "dependencies": {
-    "chokidar": "^3.5.3",
     "express": "^4.18.2"
   },
   "build": {
