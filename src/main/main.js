@@ -259,6 +259,10 @@ ipcMain.handle('read-project-file', async (event, projectPath) => {
     // Check if build files already exist (using single volume)
     const buildStatus = await checkBuildStatus(DOCKER_VOLUME_NAME);
     
+    // Set outputPath if build is complete
+    const dockerPath = path.join(__dirname, '../../docker-build');
+    const outputPath = path.join(dockerPath, 'output');
+    
     return {
       success: true,
       lvglVersion,
@@ -269,7 +273,8 @@ ipcMain.handle('read-project-file', async (event, projectPath) => {
       displayWidth,
       displayHeight,
       setupComplete: buildStatus.setupComplete,
-      buildComplete: buildStatus.buildComplete
+      buildComplete: buildStatus.buildComplete,
+      outputPath: outputPath
     };
   } catch (error) {
     return {

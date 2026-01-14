@@ -171,7 +171,8 @@ function setupEventListeners() {
     
     try {
       const text = await navigator.clipboard.readText();
-      elements.btnPaste.disabled = !text || text.trim().length === 0;
+      const trimmed = text ? text.trim() : '';
+      elements.btnPaste.disabled = !trimmed || !trimmed.endsWith('.eez-project');
     } catch (err) {
       elements.btnPaste.disabled = true;
     }
@@ -559,6 +560,11 @@ async function loadProject(projectPath) {
       state.setupComplete = result.setupComplete || false;
       state.buildComplete = result.buildComplete || false;
       state.testRunning = false;
+      
+      // Set outputPath if build is complete (so Test button works on app restart)
+      if (state.buildComplete) {
+        state.outputPath = result.outputPath;
+      }
       
       // Update status indicators
       if (state.buildComplete) {
