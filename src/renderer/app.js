@@ -29,16 +29,14 @@ const elements = {
   btnOpenInEEZStudio: document.getElementById('btnOpenInEEZStudio'),
   btnOpenInVSCode: document.getElementById('btnOpenInVSCode'),
   
-  setupStatus: document.getElementById('setupStatus'),
   buildStatus: document.getElementById('buildStatus'),
   testStatus: document.getElementById('testStatus'),
   
-  btnSetup: document.getElementById('btnSetup'),
   btnBuild: document.getElementById('btnBuild'),
-  btnRunRebuild: document.getElementById('btnRunRebuild'),
+  btnCleanBuild: document.getElementById('btnCleanBuild'),
+  btnCleanAll: document.getElementById('btnCleanAll'),
   btnTest: document.getElementById('btnTest'),
   btnStopTest: document.getElementById('btnStopTest'),
-  btnRunAll: document.getElementById('btnRunAll'),
   btnAbort: document.getElementById('btnAbort'),
   
   tabLogs: document.getElementById('tabLogs'),
@@ -219,12 +217,11 @@ elements.btnRecentProjects.addEventListener('click', (e) => {
   });
   
   // Action buttons
-  elements.btnSetup.addEventListener('click', runSetup);
-  elements.btnBuild.addEventListener('click', runBuild);
-  elements.btnRunRebuild.addEventListener('click', runRebuild);
+  elements.btnBuild.addEventListener('click', buildProject);
+  elements.btnCleanBuild.addEventListener('click', cleanBuildProject);
+  elements.btnCleanAll.addEventListener('click', cleanAllProject);
   elements.btnTest.addEventListener('click', runTest);
   elements.btnStopTest.addEventListener('click', stopTest);
-  elements.btnRunAll.addEventListener('click', runAll);
   elements.btnAbort.addEventListener('click', abortOperation);
   
   // Open in VS Code button
@@ -555,7 +552,6 @@ async function loadProject(projectPath) {
       state.testRunning = false;
       
       // Reset status indicators
-      setStatus('setupStatus', 'pending', '');
       setStatus('buildStatus', 'pending', '');
       setStatus('testStatus', 'pending', '');
     } else {
@@ -565,10 +561,6 @@ async function loadProject(projectPath) {
       state.testRunning = false;
       
       // Update status indicators
-      if (state.setupComplete) {
-        setStatus('setupStatus', 'completed', '✓ Complete');
-        logMessage('info', 'Previous setup detected.');
-      }
       if (state.buildComplete) {
         setStatus('buildStatus', 'completed', '✓ Complete');
         logMessage('info', 'Previous build detected. Ready to test.');
@@ -585,8 +577,8 @@ async function loadProject(projectPath) {
   }
 }
 
-// Run setup
-async function runSetup() {
+// Build project (Setup -> Build -> Extract)
+async function buildProject() {
   if (!state.projectInfo) return;
   
   // Stop test if running
@@ -614,94 +606,173 @@ async function runSetup() {
   }
   
   state.operationRunning = true;
-  elements.btnSetup.disabled = true;
-  setStatus('setupStatus', 'in-progress', 'Running...');
+  state.abortRequested = false;
   updateUI();
   
-  logMessage('info', '=== Starting Setup ===');
+  const startTime = Date.now();
+  logMessage('info', '=== Starting Build (Setup -> Build -> Extract) ===');
   
-  const result = await window.electronAPI.setupProject(state.projectInfo);
+  // Step 1: Run Setup
+  logMessage('info', 'Step 1/3: Running Setup...');
+  setStatus('buildStatus', 'in-progress', 'Setup...');
   
-  if (result.success) {
-    state.setupComplete = true;
-    state.buildComplete = false;
-    state.testRunning = false;
-    setStatus('setupStatus', 'completed', '✓ Complete');
-    setStatus('buildStatus', 'pending', '');
-    setStatus('testStatus', 'pending', '');
-  } else {
+  const setupResult = await window.electronAPI.setupProject(state.projectInfo);
+  
+  // Check if aborted during operation
+  if (state.abortRequested) {
+    logMessage('warning', 'Setup aborted by user');
     state.setupComplete = false;
-    setStatus('setupStatus', 'error', '✗ Failed');
-  }
-  
-  state.operationRunning = false;
-  updateUI();
-}
-
-// Run build
-async function runBuild() {
-  if (!state.projectInfo || !state.setupComplete) return;
-  
-  // Stop test if running
-  if (state.testRunning) {
-    await stopTest();
-  }
-  
-  state.operationRunning = true;
-  elements.btnBuild.disabled = true;
-  setStatus('buildStatus', 'in-progress', 'Building...');
-  updateUI();
-  
-  logMessage('info', '=== Starting Build ===');
-  
-  const result = await window.electronAPI.buildProject(state.projectInfo);
-  
-  if (result.success) {
-    state.buildComplete = true;
-    state.testRunning = false;
-    setStatus('buildStatus', 'completed', '✓ Complete');
-    setStatus('testStatus', 'pending', '');
-  } else {
     state.buildComplete = false;
-    setStatus('buildStatus', 'error', '✗ Failed');
-  }
-  
-  state.operationRunning = false;
-  updateUI();
-}
-
-// Run rebuild (clean build directory and rebuild)
-async function runRebuild() {
-  if (!state.projectInfo || !state.setupComplete) return;
-  
-  // Stop test if running
-  if (state.testRunning) {
-    await stopTest();
-  }
-  
-  state.operationRunning = true;
-  elements.btnRunRebuild.disabled = true;
-  setStatus('buildStatus', 'in-progress', 'Cleaning...');
-  updateUI();
-  
-  logMessage('info', '=== Starting Rebuild ===');
-  
-  // Clean build directory
-  logMessage('info', 'Cleaning build directory...');
-  const cleanResult = await window.electronAPI.cleanBuild();
-  
-  if (!cleanResult.success) {
-    logMessage('error', 'Failed to clean build directory');
-    state.buildComplete = false;
-    setStatus('buildStatus', 'error', '✗ Failed');
+    setStatus('buildStatus', 'error', '✗ Aborted');
     state.operationRunning = false;
-    elements.btnRunRebuild.disabled = false;
+    state.abortRequested = false;
     updateUI();
     return;
   }
   
-  // Run build
-  await runBuild();
+  if (!setupResult.success) {
+    logMessage('error', 'Setup failed - aborting Build');
+    state.setupComplete = false;
+    state.buildComplete = false;
+    setStatus('buildStatus', 'error', '✗ Failed');
+    state.operationRunning = false;
+    updateUI();
+    return;
+  }
+  
+  state.setupComplete = true;
+  
+  // Check for abort
+  if (state.abortRequested) {
+    logMessage('warning', 'Build aborted after Setup');
+    state.operationRunning = false;
+    state.abortRequested = false;
+    updateUI();
+    return;
+  }
+  
+  // Step 2: Run Build
+  logMessage('info', 'Step 2/3: Running Build...');
+  setStatus('buildStatus', 'in-progress', 'Building...');
+  
+  const buildResult = await window.electronAPI.buildProject(state.projectInfo);
+  
+  // Check if aborted during operation
+  if (state.abortRequested) {
+    logMessage('warning', 'Build aborted by user');
+    state.buildComplete = false;
+    setStatus('buildStatus', 'error', '✗ Aborted');
+    state.operationRunning = false;
+    state.abortRequested = false;
+    updateUI();
+    return;
+  }
+  
+  if (!buildResult.success) {
+    logMessage('error', 'Build failed');
+    state.buildComplete = false;
+    setStatus('buildStatus', 'error', '✗ Failed');
+    state.operationRunning = false;
+    updateUI();
+    return;
+  }
+  
+  // Check for abort
+  if (state.abortRequested) {
+    logMessage('warning', 'Build aborted after compilation');
+    state.operationRunning = false;
+    state.abortRequested = false;
+    updateUI();
+    return;
+  }
+  
+  // Step 3: Extract files for testing
+  logMessage('info', 'Step 3/3: Extracting files...');
+  setStatus('buildStatus', 'in-progress', 'Extracting...');
+  
+  const extractResult = await window.electronAPI.extractBuild();
+  
+  if (!extractResult.success) {
+    logMessage('error', 'Extract failed');
+    state.buildComplete = false;
+    setStatus('buildStatus', 'error', '✗ Failed');
+    state.operationRunning = false;
+    updateUI();
+    return;
+  }
+  
+  state.outputPath = extractResult.outputPath;
+  state.buildComplete = true;
+  setStatus('buildStatus', 'completed', '✓ Complete');
+  
+  const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+  logMessage('success', `Build completed successfully in ${elapsed}s`);
+  
+  state.operationRunning = false;
+  updateUI();
+}
+
+// Clean build directory only
+async function cleanBuildProject() {
+  if (!state.projectInfo) return;
+  
+  // Stop test if running
+  if (state.testRunning) {
+    await stopTest();
+  }
+  
+  state.operationRunning = true;
+  setStatus('buildStatus', 'in-progress', 'Cleaning...');
+  updateUI();
+  
+  logMessage('info', '=== Cleaning Build Directory ===');
+  
+  const result = await window.electronAPI.cleanBuild();
+  
+  if (result.success) {
+    state.buildComplete = false;
+    setStatus('buildStatus', 'pending', '');
+    setStatus('testStatus', 'pending', '');
+    logMessage('success', 'Build directory cleaned successfully');
+  } else {
+    logMessage('error', 'Failed to clean build directory');
+    setStatus('buildStatus', 'error', '✗ Failed');
+  }
+  
+  state.operationRunning = false;
+  updateUI();
+}
+
+// Clean all (delete entire /project directory)
+async function cleanAllProject() {
+  if (!state.projectInfo) return;
+  
+  // Stop test if running
+  if (state.testRunning) {
+    await stopTest();
+  }
+  
+  state.operationRunning = true;
+  setStatus('buildStatus', 'in-progress', 'Cleaning...');
+  updateUI();
+  
+  logMessage('info', '=== Cleaning All Project Files ===');
+  
+  const result = await window.electronAPI.cleanProject();
+  
+  if (result.success) {
+    state.setupComplete = false;
+    state.buildComplete = false;
+    setStatus('buildStatus', 'pending', '');
+    setStatus('testStatus', 'pending', '');
+    logMessage('success', 'Project cleaned successfully');
+  } else {
+    logMessage('error', 'Failed to clean project');
+    setStatus('buildStatus', 'error', '✗ Failed');
+  }
+  
+  state.operationRunning = false;
+  updateUI();
 }
 
 // Abort current operation
@@ -724,183 +795,18 @@ async function abortOperation() {
   updateUI();
 }
 
-// Run all (Setup -> Build -> Test)
-async function runAll() {
-  if (!state.projectInfo) return;
-  
-  // Stop test if running
-  if (state.testRunning) {
-    await stopTest();
-  }
-  
-  state.operationRunning = true;
-  state.abortRequested = false;
-  elements.btnRunAll.disabled = true;
-  updateUI();
-  
-  const startTime = Date.now();
-  logMessage('info', '=== Starting Run All (Setup -> Build -> Test) ===');
-  
-  // Step 1: Run Setup
-  logMessage('info', 'Step 1/3: Running Setup...');
-  elements.btnSetup.disabled = true;
-  setStatus('setupStatus', 'in-progress', 'Running...');
-  
-  const setupResult = await window.electronAPI.setupProject(state.projectInfo);
-  
-  // Check if aborted during operation
-  if (state.abortRequested) {
-    logMessage('warning', 'Setup aborted by user');
-    state.setupComplete = false;
-    setStatus('setupStatus', 'error', '✗ Aborted');
-    state.operationRunning = false;
-    state.abortRequested = false;
-    updateUI();
-    return;
-  }
-  
-  if (!setupResult.success) {
-    logMessage('error', 'Setup failed - aborting Run All');
-    state.setupComplete = false;
-    setStatus('setupStatus', 'error', '✗ Failed');
-    state.operationRunning = false;
-    updateUI();
-    return;
-  }
-  
-  state.setupComplete = true;
-  setStatus('setupStatus', 'completed', '✓ Complete');
-  
-  // Check for abort
-  if (state.abortRequested) {
-    logMessage('warning', 'Run All aborted after Setup');
-    state.operationRunning = false;
-    state.abortRequested = false;
-    updateUI();
-    return;
-  }
-  
-  // Step 2: Run Build
-  logMessage('info', 'Step 2/3: Running Build...');
-  elements.btnBuild.disabled = true;
-  setStatus('buildStatus', 'in-progress', 'Building...');
-  
-  const buildResult = await window.electronAPI.buildProject(state.projectInfo);
-  
-  // Check if aborted during operation
-  if (state.abortRequested) {
-    logMessage('warning', 'Build aborted by user');
-    state.buildComplete = false;
-    setStatus('buildStatus', 'error', '✗ Aborted');
-    state.operationRunning = false;
-    state.abortRequested = false;
-    updateUI();
-    return;
-  }
-  
-  if (!buildResult.success) {
-    logMessage('error', 'Build failed - aborting Run All');
-    state.buildComplete = false;
-    setStatus('buildStatus', 'error', '✗ Failed');
-    state.operationRunning = false;
-    updateUI();
-    return;
-  }
-  
-  state.buildComplete = true;
-  setStatus('buildStatus', 'completed', '✓ Complete');
-  
-  // Check for abort
-  if (state.abortRequested) {
-    logMessage('warning', 'Run All aborted after Build');
-    state.operationRunning = false;
-    state.abortRequested = false;
-    updateUI();
-    return;
-  }
-  
-  // Step 3: Run Test
-  logMessage('info', 'Step 3/3: Starting Test...');
-  elements.btnTest.disabled = true;
-  setStatus('testStatus', 'in-progress', 'Extracting...');
-  
-  const extractResult = await window.electronAPI.extractBuild();
-  
-  if (!extractResult.success) {
-    logMessage('error', 'Extract failed - aborting Run All');
-    setStatus('testStatus', 'error', '✗ Failed');
-    state.operationRunning = false;
-    updateUI();
-    return;
-  }
-  
-  state.outputPath = extractResult.outputPath;
-  
-  setStatus('testStatus', 'in-progress', 'Starting server...');
-  const serverResult = await window.electronAPI.startTestServer(state.outputPath);
-  
-  if (!serverResult.success) {
-    logMessage('error', 'Server start failed - aborting Run All');
-    setStatus('testStatus', 'error', '✗ Failed');
-    state.operationRunning = false;
-    updateUI();
-    return;
-  }
-  
-  state.testUrl = serverResult.url;
-  state.testRunning = true;
-  setStatus('testStatus', 'running', '▶ Running');
-  
-  // Show test view and Preview tab
-  elements.testView.style.display = 'flex';
-  elements.tabPreview.style.display = 'inline-block';
-  switchTab('preview');
-  
-  // Clear console output
-  elements.testConsoleOutput.innerHTML = '';
-  
-  // Force cache-busting reload
-  elements.testFrame.src = 'about:blank';
-  setTimeout(() => {
-    elements.testFrame.src = `${state.testUrl}?t=${Date.now()}`;
-  }, 100);
-  
-  elements.btnTest.style.display = 'none';
-  elements.btnStopTest.style.display = 'inline-block';
-  
-  const duration = ((Date.now() - startTime) / 1000).toFixed(1);
-  logMessage('success', `=== Run All completed successfully in ${duration}s! ===`);
-  
-  state.operationRunning = false;
-  updateUI();
-}
-
 // Run test
 async function runTest() {
-  if (!state.projectInfo || !state.buildComplete) return;
+  if (!state.projectInfo || !state.buildComplete || !state.outputPath) return;
   
   state.operationRunning = true;
   elements.btnTest.disabled = true;
-  setStatus('testStatus', 'in-progress', 'Extracting...');
+  setStatus('testStatus', 'in-progress', 'Starting server...');
   updateUI();
   
   logMessage('info', '=== Starting Test ===');
   
-  // Extract build files
-  const extractResult = await window.electronAPI.extractBuild();
-  
-  if (!extractResult.success) {
-    setStatus('testStatus', 'error', '✗ Failed');
-    state.operationRunning = false;
-    elements.btnTest.disabled = false;
-    updateUI();
-    return;
-  }
-  
-  state.outputPath = extractResult.outputPath;
-  
-  // Start test server
-  setStatus('testStatus', 'in-progress', 'Starting server...');
+  // Start test server (files already extracted during build)
   const serverResult = await window.electronAPI.startTestServer(state.outputPath);
   
   if (serverResult.success) {
@@ -990,21 +896,18 @@ function updateUI() {
     elements.btnPaste.disabled = true;
     elements.btnRecentProjects.disabled = true;
     elements.btnReloadProject.disabled = true;
-    elements.btnSetup.disabled = true;
     elements.btnBuild.disabled = true;
-    elements.btnRunRebuild.disabled = true;
+    elements.btnCleanBuild.disabled = true;
+    elements.btnCleanAll.disabled = true;
     elements.btnTest.disabled = true;
-    elements.btnRunAll.disabled = true;
     
     // Show Abort button when operation is running
-    elements.btnRunAll.style.display = 'none';
     elements.btnAbort.style.display = 'inline-block';
     return;
   }
   
   // Hide Abort button when no operation is running
   elements.btnAbort.style.display = 'none';
-  elements.btnRunAll.style.display = 'inline-block';
   
   // Disable all buttons if test is running (except Stop Test which is shown instead)
   if (state.testRunning) {
@@ -1013,11 +916,10 @@ function updateUI() {
     elements.btnPaste.disabled = true;
     elements.btnRecentProjects.disabled = true;
     elements.btnReloadProject.disabled = true;
-    elements.btnSetup.disabled = true;
     elements.btnBuild.disabled = true;
-    elements.btnRunRebuild.disabled = true;
+    elements.btnCleanBuild.disabled = true;
+    elements.btnCleanAll.disabled = true;
     elements.btnTest.disabled = true;
-    elements.btnRunAll.disabled = true;
     return;
   }
   
@@ -1027,15 +929,13 @@ function updateUI() {
   elements.btnRecentProjects.disabled = false;
   // btnPaste is controlled by clipboard check interval
   elements.btnReloadProject.disabled = !state.projectInfo;
-  elements.btnSetup.disabled = !state.projectInfo;
-  elements.btnBuild.disabled = !state.setupComplete;
-  elements.btnRunRebuild.disabled = !state.setupComplete;
+  elements.btnBuild.disabled = !state.projectInfo;
+  elements.btnCleanBuild.disabled = !state.projectInfo;
+  elements.btnCleanAll.disabled = !state.projectInfo;
   elements.btnTest.disabled = !state.buildComplete || state.testRunning;
-  elements.btnRunAll.disabled = !state.projectInfo;
   
   // Update status badges
   if (!state.projectInfo) {
-    setStatus('setupStatus', 'pending', '');
     setStatus('buildStatus', 'pending', '');
     setStatus('testStatus', 'pending', '');
   }

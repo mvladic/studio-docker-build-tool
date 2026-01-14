@@ -50,63 +50,39 @@
           </button>
           </p>
         </div>
-        <div class="abort-container">
-          <button id="btnAbort" class="btn btn-danger" style="display: none;">
-            Abort
-          </button>
-        </div>
-      </section>
-
-      <!-- Run All Section -->
-      <section class="section">
-        <h2>Run All</h2>
-        <p class="section-description">
-          Execute Setup, Build, and Test in sequence.
-        </p>
-        <button id="btnRunAll" class="btn btn-primary" disabled>
-          Run All
-        </button>
-      </section>
-
-      <!-- Setup Section -->
-      <section class="section">
-        <h2>
-          1. Setup
-          <span id="setupStatus" class="status-badge"></span>
-        </h2>
-        <p class="section-description">
-          Initialize Docker environment and copy project files.
-        </p>
-        <button id="btnSetup" class="btn btn-primary" disabled>
-          Run Setup
-        </button>
       </section>
 
       <!-- Build Section -->
       <section class="section">
         <h2>
-          2. Build
+          Build
           <span id="buildStatus" class="status-badge"></span>
         </h2>
         <p class="section-description">
-          Compile the project using Emscripten in Docker.
+          Setup environment, compile project, and extract files for testing.
         </p>
         <button id="btnBuild" class="btn btn-primary" disabled>
-          Run Build
+          Build
         </button>
-        <button id="btnRunRebuild" class="btn btn-secondary" disabled>
-          Run Rebuild
+        <button id="btnCleanBuild" class="btn btn-secondary" disabled>
+          Clean Build
+        </button>
+        <button id="btnCleanAll" class="btn btn-secondary" disabled>
+          Clean All
+        </button>
+        <button id="btnAbort" class="btn btn-danger" style="display: none;">
+          Abort
         </button>
       </section>
 
       <!-- Test Section -->
       <section class="section">
         <h2>
-          3. Test
+          Test
           <span id="testStatus" class="status-badge"></span>
         </h2>
         <p class="section-description">
-          Extract and serve the compiled application.
+          Serve the compiled application locally.
         </p>
         <button id="btnTest" class="btn btn-primary" disabled>
           Start Test

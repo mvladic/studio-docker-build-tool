@@ -10,6 +10,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   setupProject: (projectInfo) => ipcRenderer.invoke('setup-project', projectInfo),
   buildProject: (projectInfo) => ipcRenderer.invoke('build-project', projectInfo),
   cleanBuild: () => ipcRenderer.invoke('clean-build'),
+  cleanProject: () => ipcRenderer.invoke('clean-project'),
   extractBuild: () => ipcRenderer.invoke('extract-build'),
   startTestServer: (outputPath) => ipcRenderer.invoke('start-test-server', outputPath),
   stopTestServer: () => ipcRenderer.invoke('stop-test-server'),

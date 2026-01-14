@@ -544,6 +544,34 @@ ipcMain.handle('clean-build', async (event) => {
   }
 });
 
+// Clean project (delete entire /project directory for fresh start)
+ipcMain.handle('clean-project', async (event) => {
+  const startTime = Date.now();
+  try {
+    const dockerPath = path.join(__dirname, '../../docker-build');
+    const env = { PROJECT_VOLUME: DOCKER_VOLUME_NAME };
+    
+    mainWindow.webContents.send('log-message', { type: 'info', text: 'Removing all contents from /project directory...\n' });
+    
+    const result = await runDockerCommand('docker-compose', [
+      'run', '--rm', 'emscripten-build',
+      'sh', '-c', '"rm -rf /project/* /project/.*[!.]*"'
+    ], env, dockerPath);
+    
+    if (result.success) {
+      const duration = ((Date.now() - startTime) / 1000).toFixed(1);
+      mainWindow.webContents.send('log-message', { type: 'success', text: `Project directory cleaned in ${duration}s. Next build will start from scratch.\n` });
+      return { success: true };
+    } else {
+      throw new Error('Clean failed');
+    }
+    
+  } catch (error) {
+    mainWindow.webContents.send('log-message', { type: 'error', text: `Clean failed: ${error.message}\n` });
+    return { success: false, error: error.message };
+  }
+});
+
 // Extract build output
 ipcMain.handle('extract-build', async (event) => {
   const startTime = Date.now();
