@@ -160,7 +160,7 @@ If your version isn't supported, the script will show an error.
 The script uses the same Docker configuration as the Electron app:
 - Docker volume: `lvgl-simulator`
 - Docker compose file: `docker-build/docker-compose.yml`
-- Repository: `mvladic/lvgl-simulator-for-studio-docker-build`
+- Repository: `eez-open/lvgl-simulator-for-studio-docker-build`
 
 ## Using docker-build-lib.ts in Your Code
 

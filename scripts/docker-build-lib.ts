@@ -334,7 +334,7 @@ export async function setupProject(projectInfo: ProjectInfo, config: BuildConfig
 
     result = await runCommand(
       'docker',
-      ['exec', containerId, 'sh', '-c', `"cd /project && git clone --recursive https://github.com/mvladic/${config.repositoryName} ."`],
+      ['exec', containerId, 'sh', '-c', `"cd /project && git clone --recursive https://github.com/eez-open/${config.repositoryName} ."`],
       config.dockerBuildPath,
       env,
       log

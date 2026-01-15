@@ -9,11 +9,11 @@
 
 ## About
 
-This tool provides a user-friendly desktop interface for building LVGL-based projects created with [EEZ Studio](https://github.com/eez-open/studio). It uses the [lvgl-simulator-for-studio-docker-build](https://github.com/mvladic/lvgl-simulator-for-studio-docker-build) repository to compile your projects into WebAssembly applications that run in the browser.
+This tool provides a user-friendly desktop interface for building LVGL-based projects created with [EEZ Studio](https://github.com/eez-open/studio). It uses the [lvgl-simulator-for-studio-docker-build](https://github.com/eez-open/lvgl-simulator-for-studio-docker-build) repository to compile your projects into WebAssembly applications that run in the browser.
 
 **Key Components:**
 - **EEZ Studio**: Visual development tool for creating LVGL user interfaces
-- **Build Repository**: [lvgl-simulator-for-studio-docker-build](https://github.com/mvladic/lvgl-simulator-for-studio-docker-build) - LVGL simulator with Emscripten build scripts
+- **Build Repository**: [lvgl-simulator-for-studio-docker-build](https://github.com/eez-open/lvgl-simulator-for-studio-docker-build) - LVGL simulator with Emscripten build scripts
 - **Docker**: Isolated build environment with Emscripten toolchain
 - **This Tool**: Desktop GUI that orchestrates the build process
 
@@ -120,7 +120,7 @@ assets/
 ## Docker Volumes
 
 The tool uses a single named volume for efficient builds:
-- **lvgl-simulator**: Persistent Docker volume containing the cloned [lvgl-simulator-for-studio-docker-build](https://github.com/mvladic/lvgl-simulator-for-studio-docker-build) repository and Emscripten cache
+- **lvgl-simulator**: Persistent Docker volume containing the cloned [lvgl-simulator-for-studio-docker-build](https://github.com/eez-open/lvgl-simulator-for-studio-docker-build) repository and Emscripten cache
 
 The repository is cloned once on first setup, then updated via `git pull` on subsequent builds. Source files from your project's destination folder (configured in EEZ Studio settings) are copied to `/project/src/` before each build.
 
