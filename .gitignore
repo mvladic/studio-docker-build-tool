@@ -9,3 +9,5 @@ temp/
 
 docker-build/output
 example-projects
+
+/output/**
