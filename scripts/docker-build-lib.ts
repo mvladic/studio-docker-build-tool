@@ -14,6 +14,12 @@ export interface BuildConfig {
   dockerBuildPath: string;
 }
 
+export interface FontInfo {
+  localPath: string;           // Absolute path on local system
+  targetPath: string;          // Path in Docker container (/fonts/...)
+  fileName: string;            // Font file name
+}
+
 export interface ProjectInfo {
   lvglVersion: string;
   flowSupport: boolean;
@@ -22,6 +28,7 @@ export interface ProjectInfo {
   destinationFolder: string;
   displayWidth: number;
   displayHeight: number;
+  fonts: FontInfo[];           // Array of FreeType fonts to include
 }
 
 export interface CommandResult {
@@ -31,6 +38,97 @@ export interface CommandResult {
 }
 
 export type LogFunction = (message: string, type?: 'info' | 'success' | 'error' | 'warning') => void;
+
+/**
+ * Read and parse the EEZ project file
+ */
+export async function readProjectFile(projectPath: string, log: LogFunction): Promise<ProjectInfo> {
+  log(`Reading project file: ${projectPath}`);
+
+  if (!fs.existsSync(projectPath)) {
+    throw new Error(`Project file not found: ${projectPath}`);
+  }
+
+  const content = fs.readFileSync(projectPath, 'utf8');
+  const project = JSON.parse(content);
+
+  let lvglVersion = project.settings?.general?.lvglVersion;
+  const flowSupport = project.settings?.general?.flowSupport || false;
+  const displayWidth = project.settings?.general?.displayWidth || 800;
+  const displayHeight = project.settings?.general?.displayHeight || 480;
+  const destinationFolder = project.settings?.build?.destinationFolder || 'src/ui';
+
+  if (!lvglVersion) {
+    throw new Error('LVGL version not specified in project settings');
+  }
+
+  // Map unsupported versions to supported ones
+  const versionMap: Record<string, string> = {
+    '8.3': '8.4.0',
+    '8.3.0': '8.4.0',
+    '9.0': '9.2.2',
+    '9.0.0': '9.2.2',
+  };
+
+  if (versionMap[lvglVersion]) {
+    log(`LVGL version ${lvglVersion} mapped to ${versionMap[lvglVersion]}`, 'info');
+    lvglVersion = versionMap[lvglVersion];
+  }
+
+  const projectDir = path.dirname(projectPath);
+  const normalizedDestination = destinationFolder.replace(/\\/g, '/');
+  const uiDir = path.join(projectDir, normalizedDestination);
+
+  // Check if destination folder exists
+  if (!fs.existsSync(uiDir)) {
+    throw new Error(`Build destination directory not found at: ${uiDir}`);
+  }
+
+  // Parse fonts
+  const fonts: FontInfo[] = [];
+  if (project.fonts && Array.isArray(project.fonts)) {
+    for (const font of project.fonts) {
+      if (font.lvglUseFreeType === true) {
+        const localFontPath = path.join(projectDir, font.source.filePath.replace(/\\/g, '/'));
+        const targetFontPath = font.lvglFreeTypeFilePath;
+        const fontFileName = path.basename(localFontPath);
+
+        // Validate that font file exists
+        if (!fs.existsSync(localFontPath)) {
+          log(`Warning: Font file not found: ${localFontPath}`, 'warning');
+          continue;
+        }
+
+        fonts.push({
+          localPath: localFontPath,
+          targetPath: targetFontPath,
+          fileName: fontFileName,
+        });
+
+        log(`Found FreeType font: ${fontFileName} -> ${targetFontPath}`);
+      }
+    }
+  }
+
+  if (fonts.length > 0) {
+    log(`Total FreeType fonts to include: ${fonts.length}`, 'success');
+  }
+
+  log(`Detected project: LVGL ${lvglVersion} (${flowSupport ? 'with' : 'no'} flow support)`, 'success');
+  log(`Display: ${displayWidth}x${displayHeight}`);
+  log(`UI directory: ${uiDir}`);
+
+  return {
+    lvglVersion,
+    flowSupport,
+    projectDir,
+    uiDir,
+    destinationFolder: normalizedDestination,
+    displayWidth,
+    displayHeight,
+    fonts,
+  };
+}
 
 /**
  * Run a command and return the result
@@ -322,6 +420,66 @@ export async function setupProject(projectInfo: ProjectInfo, config: BuildConfig
     log
   );
 
+  // Copy fonts if any are specified
+  if (projectInfo.fonts && projectInfo.fonts.length > 0) {
+    log(`Copying ${projectInfo.fonts.length} font(s) to container...`);
+    
+    // Create fonts directory in container
+    await runCommand(
+      'docker',
+      ['exec', containerId, 'mkdir', '-p', '/project/fonts'],
+      config.dockerBuildPath,
+      env,
+      log
+    );
+
+    // Copy each font file
+    for (const font of projectInfo.fonts) {
+      log(`Copying font: ${font.fileName}`);
+      
+      // Determine target directory from targetPath
+      const targetDir = path.posix.dirname(font.targetPath);
+      const targetFileName = path.posix.basename(font.targetPath);
+      
+      // Create target directory structure in container
+      await runCommand(
+        'docker',
+        ['exec', containerId, 'mkdir', '-p', `/project${targetDir}`],
+        config.dockerBuildPath,
+        env,
+        log
+      );
+
+      // Copy the font file to the container
+      result = await runCommand(
+        'docker',
+        ['cp', font.localPath, `${containerId}:/project${targetDir}/${targetFileName}`],
+        config.dockerBuildPath,
+        env,
+        log
+      );
+
+      if (!result.success) {
+        await runCommand('docker', ['stop', containerId], config.dockerBuildPath, env, log);
+        throw new Error(`Failed to copy font file: ${font.fileName}`);
+      }
+    }
+
+    // Create fonts manifest file for build.sh
+    const fontsManifest = projectInfo.fonts.map(f => f.targetPath).join('\n');
+    const manifestContent = Buffer.from(fontsManifest).toString('base64');
+    
+    await runCommand(
+      'docker',
+      ['exec', containerId, 'sh', '-c', `"echo '${manifestContent}' | base64 -d > /project/fonts.txt"`],
+      config.dockerBuildPath,
+      env,
+      log
+    );
+
+    log('Fonts manifest created: /project/fonts.txt', 'success');
+  }
+
   // Stop container
   await runCommand('docker', ['stop', containerId], config.dockerBuildPath, env, log);
 
@@ -341,7 +499,14 @@ export async function buildProject(projectInfo: ProjectInfo, config: BuildConfig
   log(`Starting build (LVGL ${projectInfo.lvglVersion}, ${projectInfo.displayWidth}x${projectInfo.displayHeight})...`);
 
   // Use the build.sh script with parameters
-  const buildCommand = `"./build.sh --lvgl=${projectInfo.lvglVersion} --display-width=${projectInfo.displayWidth} --display-height=${projectInfo.displayHeight}"`;
+  let buildCommand = `"./build.sh --lvgl=${projectInfo.lvglVersion} --display-width=${projectInfo.displayWidth} --display-height=${projectInfo.displayHeight}`;
+  
+  // Add fonts parameter if fonts are present
+  if (projectInfo.fonts && projectInfo.fonts.length > 0) {
+    buildCommand += ' --fonts=/project/fonts.txt';
+  }
+  
+  buildCommand += '"';
 
   const result = await runCommand(
     'docker-compose',

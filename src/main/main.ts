@@ -1,29 +1,91 @@
-const { app, BrowserWindow, ipcMain, dialog } = require('electron');
-const path = require('path');
-const fs = require('fs').promises;
-const { spawn } = require('child_process');
-const express = require('express');
+import { app, BrowserWindow, ipcMain, dialog } from 'electron';
+import * as path from 'path';
+import { promises as fs } from 'fs';
+import { spawn, ChildProcess } from 'child_process';
+import express, { Express, Request, Response, NextFunction } from 'express';
+import * as http from 'http';
 
-let mainWindow;
-let testServer = null;
-let currentPort = null;
-let currentDockerProcess = null;
+// Import build library functions
+import {
+  checkDocker,
+  readProjectFile,
+  setupProject,
+  buildProject,
+  extractBuild,
+  cleanBuild,
+  cleanAll,
+} from '../../scripts/docker-build-lib';
+
+// Determine if running from compiled code (production) or source (development)
+const isProduction = __dirname.includes('dist');
+
+// In production (packaged app), resources folder contains the app
+// In development, we're in src/main
+const appRoot = isProduction 
+  ? path.join(__dirname, '../../../')  // dist/src/main -> root (in app.asar or unpacked)
+  : path.join(__dirname, '../../');     // src/main -> root
+
+// Get path to resources (docker-build files)
+const getResourcePath = (relativePath: string): string => {
+  if (app.isPackaged) {
+    // In packaged app, extraResources are in the resources directory
+    return path.join(process.resourcesPath, relativePath);
+  }
+  // In dev, use resources directory
+  return path.join(appRoot, 'resources', relativePath);
+};
+
+// Get output path (always at root /output)
+const getOutputPath = (): string => {
+  if (app.isPackaged) {
+    // In packaged app, use process.resourcesPath parent (app folder)
+    return path.join(path.dirname(process.resourcesPath), 'output');
+  }
+  // In dev, use root output directory
+  return path.join(appRoot, 'output');
+};
+
+let mainWindow: BrowserWindow | null = null;
+let testServer: http.Server | null = null;
+let currentPort: number | null = null;
+let currentDockerProcess: ChildProcess | null = null;
 
 // Single repository for all LVGL versions
 const REPOSITORY_NAME = 'lvgl-simulator-for-studio-docker-build';
 const DOCKER_VOLUME_NAME = 'lvgl-simulator';
+const DOCKER_BUILD_PATH = getResourcePath('docker-build');
+
+// Build configuration
+const buildConfig = {
+  repositoryName: REPOSITORY_NAME,
+  dockerVolumeName: DOCKER_VOLUME_NAME,
+  dockerBuildPath: DOCKER_BUILD_PATH,
+};
 
 // Store recent projects
 const RECENT_PROJECTS_FILE = path.join(app.getPath('userData'), 'recent-projects.json');
 const WINDOW_STATE_FILE = path.join(app.getPath('userData'), 'window-state.json');
-let recentProjects = [];
+let recentProjects: string[] = [];
 
 // Current project state
-let currentProjectPath = null;
-let currentProjectInfo = null;
+let currentProjectPath: string | null = null;
+let currentProjectInfo: any = null;
+
+// Logging adapter - sends messages to renderer process
+function log(message: string, type: 'info' | 'success' | 'error' | 'warning' = 'info'): void {
+  if (mainWindow && mainWindow.webContents) {
+    if (mainWindow) mainWindow.webContents.send('log-message', { type, text: message + '\n' });
+  }
+}
+
+// Helper to get error message from unknown error
+function getErrorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  return String(error);
+}
 
 // Load window state
-async function loadWindowState() {
+async function loadWindowState(): Promise<{ width: number; height: number; x?: number; y?: number; isMaximized: boolean }> {
   try {
     const data = await fs.readFile(WINDOW_STATE_FILE, 'utf8');
     return JSON.parse(data);
@@ -33,7 +95,7 @@ async function loadWindowState() {
 }
 
 // Save window state
-async function saveWindowState() {
+async function saveWindowState(): Promise<void> {
   if (!mainWindow) return;
   
   const bounds = mainWindow.getBounds();
@@ -63,7 +125,9 @@ async function createWindow() {
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
-      preload: path.join(__dirname, 'preload.js')
+      preload: app.isPackaged
+        ? path.join(__dirname, '../../../src/main/preload.js')  // In asar: dist/src/main -> src/main
+        : path.join(__dirname, '../../../src/main/preload.js')  // In dev: dist/src/main -> src/main
     }
   });
   
@@ -71,7 +135,11 @@ async function createWindow() {
     mainWindow.maximize();
   }
 
-  mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'));
+  mainWindow.loadFile(
+    app.isPackaged
+      ? path.join(__dirname, '../../../src/renderer/index.html')  // In asar: dist/src/main -> src/renderer
+      : path.join(__dirname, '../../../src/renderer/index.html')  // In dev: dist/src/main -> src/renderer
+  );
   
   // Save window state on resize and move
   mainWindow.on('resize', () => saveWindowState());
@@ -104,7 +172,7 @@ app.on('window-all-closed', () => {
 });
 
 // Filter out Docker noise messages
-function shouldFilterDockerMessage(text) {
+function shouldFilterDockerMessage(text: string): boolean {
   const filters = [
     'Found orphan containers',
     'Container docker-build-emscripten-build-run-',
@@ -134,7 +202,7 @@ async function loadRecentProjects() {
 }
 
 // Save recent projects to disk
-async function saveRecentProjects() {
+async function saveRecentProjects(): Promise<void> {
   try {
     await fs.writeFile(RECENT_PROJECTS_FILE, JSON.stringify(recentProjects, null, 2));
   } catch (error) {
@@ -143,7 +211,7 @@ async function saveRecentProjects() {
 }
 
 // Add project to recent list
-function addToRecentProjects(projectPath) {
+function addToRecentProjects(projectPath: string): void {
   // Remove if already exists
   recentProjects = recentProjects.filter(p => p !== projectPath);
   // Add to beginning
@@ -154,7 +222,7 @@ function addToRecentProjects(projectPath) {
 }
 
 // Remove project from recent list
-function removeFromRecentProjects(projectPath) {
+function removeFromRecentProjects(projectPath: string): void {
   recentProjects = recentProjects.filter(p => p !== projectPath);
   saveRecentProjects();
 }
@@ -163,6 +231,8 @@ function removeFromRecentProjects(projectPath) {
 
 // Select project file
 ipcMain.handle('select-project-file', async () => {
+  if (!mainWindow) return { canceled: true };
+  
   const result = await dialog.showOpenDialog(mainWindow, {
     properties: ['openFile'],
     filters: [
@@ -231,71 +301,25 @@ ipcMain.handle('check-docker', async () => {
 // Read and parse project file
 ipcMain.handle('read-project-file', async (event, projectPath) => {
   try {
-    const content = await fs.readFile(projectPath, 'utf8');
-    const project = JSON.parse(content);
-    
-    let lvglVersion = project.settings?.general?.lvglVersion;
-    const flowSupport = project.settings?.general?.flowSupport || false;
-    const displayWidth = project.settings?.general?.displayWidth || 800;
-    const displayHeight = project.settings?.general?.displayHeight || 480;
-    const destinationFolder = project.settings?.build?.destinationFolder || 'src/ui';
-    
-    if (!lvglVersion) {
-      throw new Error('LVGL version not specified in project settings');
-    }
-    
-    // Map unsupported versions to supported ones
-    const versionMap = {
-      '8.3': '8.4.0',
-      '8.3.0': '8.4.0',
-      '9.0': '9.2.2',
-      '9.0.0': '9.2.2'
-    };
-    
-    if (versionMap[lvglVersion]) {
-      mainWindow.webContents.send('log-message', { 
-        type: 'info', 
-        text: `LVGL version ${lvglVersion} mapped to ${versionMap[lvglVersion]}\n` 
-      });
-      lvglVersion = versionMap[lvglVersion];
-    }
-    
-    const projectDir = path.dirname(projectPath);
-    // Use destinationFolder from settings (convert backslashes to forward slashes)
-    const normalizedDestination = destinationFolder.replace(/\\/g, '/');
-    const uiDir = path.join(projectDir, normalizedDestination);
-    
-    // Check if destination folder exists
-    try {
-      await fs.access(uiDir);
-    } catch {
-      throw new Error(`Build destination directory not found at: ${uiDir}`);
-    }
+    const projectInfo = await readProjectFile(projectPath, log);
     
     // Check if build files already exist (using single volume)
     const buildStatus = await checkBuildStatus(DOCKER_VOLUME_NAME);
     
     // Set outputPath if build is complete
-    const dockerPath = path.join(__dirname, '../../docker-build');
-    const outputPath = path.join(dockerPath, 'output');
+    const outputPath = getOutputPath();
     
     return {
       success: true,
-      lvglVersion,
-      flowSupport,
-      projectDir,
-      uiDir,
-      destinationFolder: normalizedDestination,
-      displayWidth,
-      displayHeight,
+      ...projectInfo,
       setupComplete: buildStatus.setupComplete,
       buildComplete: buildStatus.buildComplete,
       outputPath: outputPath
     };
-  } catch (error) {
+  } catch (error: unknown) {
     return {
       success: false,
-      error: error.message
+      error: getErrorMessage(error)
     };
   }
 });
@@ -303,7 +327,7 @@ ipcMain.handle('read-project-file', async (event, projectPath) => {
 // Run Docker command
 ipcMain.handle('run-docker-command', async (event, command, args, options = {}) => {
   return new Promise((resolve) => {
-    const dockerPath = path.join(__dirname, '../../docker-build');
+    const dockerPath = getResourcePath('docker-build');
     const env = { ...process.env, ...options.env };
     
     const dockerProcess = spawn(command, args, {
@@ -323,7 +347,7 @@ ipcMain.handle('run-docker-command', async (event, command, args, options = {}) 
       output += text;
       
       if (mainWindow && !shouldFilterDockerMessage(text)) {
-        mainWindow.webContents.send('docker-output', {
+        if (mainWindow) mainWindow.webContents.send('docker-output', {
           type: 'stdout',
           text
         });
@@ -335,7 +359,7 @@ ipcMain.handle('run-docker-command', async (event, command, args, options = {}) 
       output += text;
       
       if (mainWindow && !shouldFilterDockerMessage(text)) {
-        mainWindow.webContents.send('docker-output', {
+        if (mainWindow) mainWindow.webContents.send('docker-output', {
           type: 'stderr',
           text
         });
@@ -346,7 +370,7 @@ ipcMain.handle('run-docker-command', async (event, command, args, options = {}) 
       hasError = true;
       resolve({
         success: false,
-        error: error.message,
+        error: getErrorMessage(error),
         output
       });
     });
@@ -355,7 +379,7 @@ ipcMain.handle('run-docker-command', async (event, command, args, options = {}) 
       currentDockerProcess = null;
       resolve({
         success: !hasError && code === 0,
-        code,
+        code: code ?? undefined,
         output
       });
     });
@@ -369,144 +393,17 @@ ipcMain.handle('setup-project', async (event, projectInfo) => {
     currentProjectPath = projectInfo.projectPath;
     currentProjectInfo = projectInfo;
     
-    const dockerPath = path.join(__dirname, '../../docker-build');
-    const env = { PROJECT_VOLUME: DOCKER_VOLUME_NAME };
-    
-    // Step 1: Build Docker image
-    mainWindow.webContents.send('log-message', { type: 'info', text: 'Building Docker image...\n' });
-    let result = await runDockerCommandSilent('docker-compose', ['build'], env, dockerPath);
-    if (!result.success) {
-      mainWindow.webContents.send('log-message', { type: 'error', text: 'docker-build-emscripten-build  Failed\n' });
-      throw new Error('Failed to build Docker image');
-    }
-    mainWindow.webContents.send('log-message', { type: 'success', text: 'docker-build-emscripten-build  Built\n' });
-    
-    // Step 2: Check if volume exists and has content
-    mainWindow.webContents.send('log-message', { type: 'info', text: 'Checking if project is already set up...\n' });
-    result = await runDockerCommandSilent('docker-compose', [
-      'run', '--rm', 'emscripten-build',
-      'test', '-f', '/project/build.sh'
-    ], env, dockerPath);
-    
-    const projectAlreadySetup = result.success;
-    
-    let containerId;
-    
-    if (!projectAlreadySetup) {
-      // Step 3: Clone repository using script (only on first setup)
-      mainWindow.webContents.send('log-message', { 
-        type: 'info', 
-        text: `First-time setup: Cloning repository from GitHub...\n` 
-      });
-      
-      // Create temp container that will be reused for file operations
-      containerId = await createTempContainer(env, dockerPath);
-      
-      result = await runDockerCommand('docker', [
-        'exec', containerId,
-        'sh', '-c', `"cd /project && git clone --recursive https://github.com/mvladic/${REPOSITORY_NAME} ."`
-      ], env, dockerPath);
-      
-      if (!result.success) {
-        await runDockerCommand('docker', ['stop', containerId], env, dockerPath);
-        throw new Error('Git clone failed');
-      }
-      
-      mainWindow.webContents.send('log-message', { 
-        type: 'success', 
-        text: 'Repository cloned successfully\n' 
-      });
-    } else {
-      mainWindow.webContents.send('log-message', { 
-        type: 'info', 
-        text: 'Project already exists in Docker volume. Checking for updates...\n' 
-      });
-      
-      // Pull latest changes from GitHub
-      mainWindow.webContents.send('log-message', { 
-        type: 'info', 
-        text: 'Pulling latest changes from GitHub...\n' 
-      });
-        
-      result = await runDockerCommand('docker-compose', [
-        'run', '--rm', 'emscripten-build',
-        'sh', '-c', '"cd /project && git pull"'
-      ], env, dockerPath);
-        
-      if (!result.success) {
-        mainWindow.webContents.send('log-message', { 
-          type: 'warning', 
-          text: 'Git pull failed, continuing with existing code...\n' 
-        });
-      } else {
-        mainWindow.webContents.send('log-message', { 
-          type: 'success', 
-          text: 'Latest changes pulled successfully\n' 
-        });
-      }
-    }
-    
-    // Step 4: Update build files (reuse container from clone if first-time setup)
-    mainWindow.webContents.send('log-message', { type: 'info', text: 'Updating build files...\n' });
-    if (!containerId) {
-      // Create container only if we didn't create one for cloning
-      containerId = await createTempContainer(env, dockerPath);
-    }
-    
-    // Remove and recreate src directory in one command
-    mainWindow.webContents.send('log-message', { type: 'info', text: 'Preparing src directory...\n' });
-    await runDockerCommand('docker', [
-      'exec', containerId,
-      'sh', '-c', '"rm -rf /project/src && mkdir -p /project/src"'
-    ], env, dockerPath);
-    
-    // Copy build destination directory - verify path exists first
-    if (!projectInfo.uiDir) {
-      await runDockerCommand('docker', ['stop', containerId], env, dockerPath);
-      throw new Error('UI directory path is missing');
-    }
-    
-    try {
-      await fs.access(projectInfo.uiDir);
-    } catch {
-      await runDockerCommand('docker', ['stop', containerId], env, dockerPath);
-      throw new Error(`UI directory not found: ${projectInfo.uiDir}`);
-    }
-    
-    // Use resolved absolute path to avoid issues
-    const resolvedUiDir = path.resolve(projectInfo.uiDir);
-    mainWindow.webContents.send('log-message', { type: 'info', text: `Copying ${resolvedUiDir} to container...\n` });
-    
-    // Copy contents of destination folder directly into /project/src/
-    // Using /. at the end copies the contents, not the folder itself
-    const cpCommand = `docker cp "${resolvedUiDir}/." ${containerId}:/project/src/`;
-    mainWindow.webContents.send('log-message', { type: 'info', text: `Running: ${cpCommand}\n` });
-    
-    result = await runDockerCommandString(cpCommand, env, dockerPath);
-    
-    if (!result.success) {
-      await runDockerCommand('docker', ['stop', containerId], env, dockerPath);
-      throw new Error('Failed to copy build destination directory');
-    }
-    
-    // Update timestamps to ensure CMake detects changes
-    await runDockerCommand('docker', [
-      'exec', containerId,
-      'find', '/project/src', '-type', 'f', '-name', '*.c', '-o', '-name', '*.h', '-exec', 'touch', '{}', '+'
-    ], env, dockerPath);
-    
-    // Stop container
-    await runDockerCommand('docker', ['stop', containerId], env, dockerPath);
+    await setupProject(projectInfo, buildConfig, log);
     
     // File watcher is already started when project is loaded
     
     const duration = ((Date.now() - startTime) / 1000).toFixed(1);
-    mainWindow.webContents.send('log-message', { type: 'success', text: `Setup completed successfully in ${duration}s!\n` });
+    if (mainWindow) mainWindow.webContents.send('log-message', { type: 'success', text: `Setup completed successfully in ${duration}s!\n` });
     return { success: true };
     
-  } catch (error) {
-    mainWindow.webContents.send('log-message', { type: 'error', text: `Setup failed: ${error.message}\n` });
-    return { success: false, error: error.message };
+  } catch (error: unknown) {
+    if (mainWindow) mainWindow.webContents.send('log-message', { type: 'error', text: `Setup failed: ${getErrorMessage(error)}\n` });
+    return { success: false, error: getErrorMessage(error) };
   }
 });
 
@@ -514,30 +411,17 @@ ipcMain.handle('setup-project', async (event, projectInfo) => {
 ipcMain.handle('build-project', async (event, projectInfo) => {
   const startTime = Date.now();
   try {
-    const dockerPath = path.join(__dirname, '../../docker-build');
-    const env = { PROJECT_VOLUME: DOCKER_VOLUME_NAME };
+    if (mainWindow) mainWindow.webContents.send('log-message', { type: 'info', text: `Starting build (LVGL ${projectInfo.lvglVersion}, ${projectInfo.displayWidth}x${projectInfo.displayHeight})...\n` });
     
-    mainWindow.webContents.send('log-message', { type: 'info', text: `Starting build (LVGL ${projectInfo.lvglVersion}, ${projectInfo.displayWidth}x${projectInfo.displayHeight})...\n` });
+    await buildProject(projectInfo, buildConfig, log);
     
-    // Use the build.sh script with parameters
-    const buildCommand = `./build.sh --lvgl=${projectInfo.lvglVersion} --display-width=${projectInfo.displayWidth} --display-height=${projectInfo.displayHeight}`;
+    const duration = ((Date.now() - startTime) / 1000).toFixed(1);
+    if (mainWindow) mainWindow.webContents.send('log-message', { type: 'success', text: `Build completed successfully in ${duration}s!\n` });
+    return { success: true };
     
-    const result = await runDockerCommand('docker-compose', [
-      'run', '--rm', 'emscripten-build',
-      'sh', '-c', `"${buildCommand}"`
-    ], env, dockerPath);
-    
-    if (result.success) {
-      const duration = ((Date.now() - startTime) / 1000).toFixed(1);
-      mainWindow.webContents.send('log-message', { type: 'success', text: `Build completed successfully in ${duration}s!\n` });
-      return { success: true };
-    } else {
-      throw new Error('Build failed');
-    }
-    
-  } catch (error) {
-    mainWindow.webContents.send('log-message', { type: 'error', text: `Build failed: ${error.message}\n` });
-    return { success: false, error: error.message };
+  } catch (error: unknown) {
+    if (mainWindow) mainWindow.webContents.send('log-message', { type: 'error', text: `Build failed: ${getErrorMessage(error)}\n` });
+    return { success: false, error: getErrorMessage(error) };
   }
 });
 
@@ -545,27 +429,17 @@ ipcMain.handle('build-project', async (event, projectInfo) => {
 ipcMain.handle('clean-build', async (event) => {
   const startTime = Date.now();
   try {
-    const dockerPath = path.join(__dirname, '../../docker-build');
-    const env = { PROJECT_VOLUME: DOCKER_VOLUME_NAME };
+    if (mainWindow) mainWindow.webContents.send('log-message', { type: 'info', text: 'Removing build directory...\n' });
     
-    mainWindow.webContents.send('log-message', { type: 'info', text: 'Removing build directory...\n' });
+    await cleanBuild(buildConfig, log);
     
-    const result = await runDockerCommand('docker-compose', [
-      'run', '--rm', 'emscripten-build',
-      'rm', '-rf', '/project/build'
-    ], env, dockerPath);
+    const duration = ((Date.now() - startTime) / 1000).toFixed(1);
+    if (mainWindow) mainWindow.webContents.send('log-message', { type: 'success', text: `Build directory cleaned in ${duration}s!\n` });
+    return { success: true };
     
-    if (result.success) {
-      const duration = ((Date.now() - startTime) / 1000).toFixed(1);
-      mainWindow.webContents.send('log-message', { type: 'success', text: `Build directory cleaned in ${duration}s!\n` });
-      return { success: true };
-    } else {
-      throw new Error('Clean failed');
-    }
-    
-  } catch (error) {
-    mainWindow.webContents.send('log-message', { type: 'error', text: `Clean failed: ${error.message}\n` });
-    return { success: false, error: error.message };
+  } catch (error: unknown) {
+    if (mainWindow) mainWindow.webContents.send('log-message', { type: 'error', text: `Clean failed: ${getErrorMessage(error)}\n` });
+    return { success: false, error: getErrorMessage(error) };
   }
 });
 
@@ -573,27 +447,17 @@ ipcMain.handle('clean-build', async (event) => {
 ipcMain.handle('clean-project', async (event) => {
   const startTime = Date.now();
   try {
-    const dockerPath = path.join(__dirname, '../../docker-build');
-    const env = { PROJECT_VOLUME: DOCKER_VOLUME_NAME };
+    if (mainWindow) mainWindow.webContents.send('log-message', { type: 'info', text: 'Removing all contents from /project directory...\n' });
     
-    mainWindow.webContents.send('log-message', { type: 'info', text: 'Removing all contents from /project directory...\n' });
+    await cleanAll(buildConfig, log);
     
-    const result = await runDockerCommand('docker-compose', [
-      'run', '--rm', 'emscripten-build',
-      'sh', '-c', '"rm -rf /project/* /project/.*[!.]*"'
-    ], env, dockerPath);
+    const duration = ((Date.now() - startTime) / 1000).toFixed(1);
+    if (mainWindow) mainWindow.webContents.send('log-message', { type: 'success', text: `Project directory cleaned in ${duration}s. Next build will start from scratch.\n` });
+    return { success: true };
     
-    if (result.success) {
-      const duration = ((Date.now() - startTime) / 1000).toFixed(1);
-      mainWindow.webContents.send('log-message', { type: 'success', text: `Project directory cleaned in ${duration}s. Next build will start from scratch.\n` });
-      return { success: true };
-    } else {
-      throw new Error('Clean failed');
-    }
-    
-  } catch (error) {
-    mainWindow.webContents.send('log-message', { type: 'error', text: `Clean failed: ${error.message}\n` });
-    return { success: false, error: error.message };
+  } catch (error: unknown) {
+    if (mainWindow) mainWindow.webContents.send('log-message', { type: 'error', text: `Clean failed: ${getErrorMessage(error)}\n` });
+    return { success: false, error: getErrorMessage(error) };
   }
 });
 
@@ -601,81 +465,24 @@ ipcMain.handle('clean-project', async (event) => {
 ipcMain.handle('extract-build', async (event) => {
   const startTime = Date.now();
   try {
-    const dockerPath = path.join(__dirname, '../../docker-build');
-    const outputPath = path.join(dockerPath, 'output');
-    const env = { PROJECT_VOLUME: DOCKER_VOLUME_NAME };
+    const outputPath = getOutputPath();
     
-    mainWindow.webContents.send('log-message', { type: 'info', text: `Output path: ${outputPath}\n` });
+    if (mainWindow) mainWindow.webContents.send('log-message', { type: 'info', text: `Output path: ${outputPath}\n` });
     
-    // Clean output directory first (remove old files)
-    mainWindow.webContents.send('log-message', { type: 'info', text: 'Cleaning output directory...\n' });
-    try {
-      await fs.rm(outputPath, { recursive: true, force: true });
-      mainWindow.webContents.send('log-message', { type: 'info', text: 'Output directory cleaned.\n' });
-    } catch (error) {
-      mainWindow.webContents.send('log-message', { type: 'warning', text: `Clean warning: ${error.message}\n` });
-    }
-    
-    // Create fresh output directory
-    await fs.mkdir(outputPath, { recursive: true });
-    
-    mainWindow.webContents.send('log-message', { type: 'info', text: 'Extracting build files from Docker volume...\n' });
-    
-    // Create temp container and copy files
-    const containerId = await createTempContainer(env, dockerPath);
-    mainWindow.webContents.send('log-message', { type: 'info', text: `Container ID: ${containerId}\n` });
-    
-    const files = ['index.html', 'index.js', 'index.wasm', 'index.data'];
-    for (const file of files) {
-      const destPath = path.join(outputPath, file);
-      const result = await runDockerCommand('docker', [
-        'cp',
-        `${containerId}:/project/build/${file}`,
-        destPath
-      ], env, dockerPath);
-      
-      // index.data is optional - only fail if required files are missing
-      if (!result.success) {
-        if (file === 'index.data') {
-          mainWindow.webContents.send('log-message', { 
-            type: 'info', 
-            text: `${file} not found (optional file, skipping)\n` 
-          });
-          continue;
-        }
-        await runDockerCommand('docker', ['stop', containerId], env, dockerPath);
-        throw new Error(`Failed to extract ${file}`);
-      }
-      
-      // Log file info
-      try {
-        const stats = await fs.stat(destPath);
-        mainWindow.webContents.send('log-message', { 
-          type: 'info', 
-          text: `Extracted ${file}: ${stats.size} bytes, modified: ${stats.mtime.toISOString()}\n` 
-        });
-      } catch (err) {
-        mainWindow.webContents.send('log-message', { 
-          type: 'warning', 
-          text: `Could not stat ${file}: ${err.message}\n` 
-        });
-      }
-    }
-    
-    await runDockerCommand('docker', ['stop', containerId], env, dockerPath);
+    await extractBuild(outputPath, buildConfig, log);
     
     const duration = ((Date.now() - startTime) / 1000).toFixed(1);
-    mainWindow.webContents.send('log-message', { type: 'success', text: `Build files extracted successfully in ${duration}s!\n` });
+    if (mainWindow) mainWindow.webContents.send('log-message', { type: 'success', text: `Build files extracted successfully in ${duration}s!\n` });
     return { success: true, outputPath };
     
-  } catch (error) {
-    mainWindow.webContents.send('log-message', { type: 'error', text: `Extract failed: ${error.message}\n` });
-    return { success: false, error: error.message };
+  } catch (error: unknown) {
+    if (mainWindow) mainWindow.webContents.send('log-message', { type: 'error', text: `Extract failed: ${getErrorMessage(error)}\n` });
+    return { success: false, error: getErrorMessage(error) };
   }
 });
 
 // Start test server
-ipcMain.handle('start-test-server', async (event, outputPath) => {
+ipcMain.handle('start-test-server', async (event, outputPath: string) => {
   try {
     // Stop existing server if running
     stopTestServer();
@@ -684,10 +491,10 @@ ipcMain.handle('start-test-server', async (event, outputPath) => {
     currentPort = await findAvailablePort(3000);
     
     // Create Express server
-    const app = express();
+    const app: Express = express();
     
     // Disable caching for all responses
-    app.use((req, res, next) => {
+    app.use((req: Request, res: Response, next: NextFunction) => {
       res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
       res.setHeader('Pragma', 'no-cache');
       res.setHeader('Expires', '0');
@@ -695,7 +502,7 @@ ipcMain.handle('start-test-server', async (event, outputPath) => {
     });
     
     // Inject console capture script into HTML
-    app.get('/', async (req, res, next) => {
+    app.get('/', async (req: Request, res: Response, next: NextFunction) => {
       try {
         const indexPath = path.join(outputPath, 'index.html');
         let html = await fs.readFile(indexPath, 'utf8');
@@ -763,7 +570,7 @@ ipcMain.handle('start-test-server', async (event, outputPath) => {
     
     testServer = app.listen(currentPort, () => {
       const url = `http://localhost:${currentPort}`;
-      mainWindow.webContents.send('log-message', { 
+      if (mainWindow) mainWindow.webContents.send('log-message', { 
         type: 'success', 
         text: `Test server started at ${url}\n` 
       });
@@ -771,8 +578,8 @@ ipcMain.handle('start-test-server', async (event, outputPath) => {
     
     return { success: true, port: currentPort, url: `http://localhost:${currentPort}` };
     
-  } catch (error) {
-    return { success: false, error: error.message };
+  } catch (error: unknown) {
+    return { success: false, error: getErrorMessage(error) };
   }
 });
 
@@ -797,8 +604,8 @@ ipcMain.handle('open-in-eez-studio', async (event, projectPath) => {
     }
     
     return { success: true };
-  } catch (error) {
-    return { success: false, error: error.message };
+  } catch (error: unknown) {
+    return { success: false, error: getErrorMessage(error) };
   }
 });
 
@@ -818,8 +625,8 @@ ipcMain.handle('open-in-vscode', async (event, folderPath) => {
     // Open the folder in VS Code
     await execAsync(`code "${folderPath}"`);
     return { success: true };
-  } catch (error) {
-    return { success: false, error: error.message };
+  } catch (error: unknown) {
+    return { success: false, error: getErrorMessage(error) };
   }
 });
 
@@ -857,8 +664,8 @@ ipcMain.handle('abort-operation', async () => {
       }, 1000);
       currentDockerProcess = null;
       return { success: true };
-    } catch (error) {
-      return { success: false, error: error.message };
+    } catch (error: unknown) {
+      return { success: false, error: getErrorMessage(error) };
     }
   }
   return { success: false, error: 'No operation running' };
@@ -866,13 +673,25 @@ ipcMain.handle('abort-operation', async () => {
 
 // Helper functions
 
-async function runDockerCommand(command, args, env, cwd) {
+interface DockerCommandResult {
+  success: boolean;
+  code?: number;
+  output?: string;
+  error?: string;
+}
+
+async function runDockerCommand(
+  command: string,
+  args: string[],
+  env: Record<string, string>,
+  cwd: string
+): Promise<DockerCommandResult> {
   return new Promise((resolve) => {
     // Log the command for debugging
     if (mainWindow) {
       const cmdLine = `${command} ${args.join(' ')}`;
       console.log('Running docker command:', cmdLine);
-      mainWindow.webContents.send('log-message', { 
+      if (mainWindow) mainWindow.webContents.send('log-message', { 
         type: 'debug', 
         text: `DEBUG: ${cmdLine}\n` 
       });
@@ -894,7 +713,7 @@ async function runDockerCommand(command, args, env, cwd) {
       output += text;
       
       if (mainWindow && !shouldFilterDockerMessage(text)) {
-        mainWindow.webContents.send('docker-output', { type: 'stdout', text });
+        if (mainWindow) mainWindow.webContents.send('docker-output', { type: 'stdout', text });
       }
     });
 
@@ -903,7 +722,7 @@ async function runDockerCommand(command, args, env, cwd) {
       output += text;
       
       if (mainWindow && !shouldFilterDockerMessage(text)) {
-        mainWindow.webContents.send('docker-output', { type: 'stderr', text });
+        if (mainWindow) mainWindow.webContents.send('docker-output', { type: 'stderr', text });
       }
     });
 
@@ -911,7 +730,7 @@ async function runDockerCommand(command, args, env, cwd) {
       currentDockerProcess = null;
       resolve({
         success: code === 0,
-        code,
+        code: code ?? undefined,
         output
       });
     });
@@ -920,7 +739,7 @@ async function runDockerCommand(command, args, env, cwd) {
       currentDockerProcess = null;
       resolve({
         success: false,
-        error: error.message,
+        error: getErrorMessage(error),
         output
       });
     });
@@ -928,11 +747,15 @@ async function runDockerCommand(command, args, env, cwd) {
 }
 
 // Run docker command as a single string (for commands with complex quoting)
-async function runDockerCommandString(commandString, env, cwd) {
+async function runDockerCommandString(
+  commandString: string,
+  env: Record<string, string>,
+  cwd: string
+): Promise<DockerCommandResult> {
   return new Promise((resolve) => {
     if (mainWindow) {
       console.log('Running docker command string:', commandString);
-      mainWindow.webContents.send('log-message', { 
+      if (mainWindow) mainWindow.webContents.send('log-message', { 
         type: 'debug', 
         text: `DEBUG: ${commandString}\n` 
       });
@@ -954,7 +777,7 @@ async function runDockerCommandString(commandString, env, cwd) {
       output += text;
       
       if (mainWindow && !shouldFilterDockerMessage(text)) {
-        mainWindow.webContents.send('docker-output', { type: 'stdout', text });
+        if (mainWindow) mainWindow.webContents.send('docker-output', { type: 'stdout', text });
       }
     });
 
@@ -963,14 +786,14 @@ async function runDockerCommandString(commandString, env, cwd) {
       output += text;
       
       if (mainWindow && !shouldFilterDockerMessage(text)) {
-        mainWindow.webContents.send('docker-output', { type: 'stderr', text });
+        if (mainWindow) mainWindow.webContents.send('docker-output', { type: 'stderr', text });
       }
     });
 
     dockerProcess.on('close', (code) => {
       resolve({
         success: code === 0,
-        code,
+        code: code ?? undefined,
         output
       });
     });
@@ -978,25 +801,25 @@ async function runDockerCommandString(commandString, env, cwd) {
     dockerProcess.on('error', (error) => {
       resolve({
         success: false,
-        error: error.message,
+        error: getErrorMessage(error),
         output
       });
     });
   });
 }
 
-async function createTempContainer(env, dockerPath) {
+async function createTempContainer(env: Record<string, string>, dockerPath: string): Promise<string> {
   const result = await runDockerCommand('docker-compose', [
     'run', '-d', '--remove-orphans', 'emscripten-build',
     'sleep', '60'
   ], env, dockerPath);
   
   // Extract container ID from output
-  const containerId = result.output.trim().split('\n').pop();
+  const containerId = (result as any).output.trim().split('\n').pop();
   return containerId;
 }
 
-function findAvailablePort(startPort) {
+function findAvailablePort(startPort: number): Promise<number> {
   return new Promise((resolve) => {
     const testServer = require('net').createServer();
     
@@ -1011,7 +834,7 @@ function findAvailablePort(startPort) {
   });
 }
 
-function stopTestServer() {
+function stopTestServer(): void {
   if (testServer) {
     testServer.close();
     testServer = null;
@@ -1019,7 +842,7 @@ function stopTestServer() {
   }
 }
 
-async function checkBuildStatus(projectName) {
+async function checkBuildStatus(projectName: string): Promise<{ setupComplete: boolean; buildComplete: boolean }> {
   try {
     const dockerPath = path.join(__dirname, '../../docker-build');
     const env = { PROJECT_VOLUME: projectName };
@@ -1030,7 +853,7 @@ async function checkBuildStatus(projectName) {
       'test', '-f', '/project/CMakeLists.txt'
     ], env, dockerPath);
     
-    const setupComplete = setupResult.success;
+    const setupComplete = (setupResult as any).success;
     
     // Check if build output exists (index.wasm)
     const buildResult = await runDockerCommandSilent('docker-compose', [
@@ -1038,7 +861,7 @@ async function checkBuildStatus(projectName) {
       'test', '-f', '/project/build/index.wasm'
     ], env, dockerPath);
     
-    const buildComplete = buildResult.success;
+    const buildComplete = (buildResult as any).success;
     
     return { setupComplete, buildComplete };
   } catch (error) {
@@ -1046,7 +869,12 @@ async function checkBuildStatus(projectName) {
   }
 }
 
-async function runDockerCommandSilent(command, args, env, cwd) {
+async function runDockerCommandSilent(
+  command: string,
+  args: string[],
+  env: Record<string, string>,
+  cwd: string
+): Promise<DockerCommandResult> {
   return new Promise((resolve) => {
     const dockerProcess = spawn(command, args, {
       cwd,
@@ -1067,7 +895,7 @@ async function runDockerCommandSilent(command, args, env, cwd) {
     dockerProcess.on('close', (code) => {
       resolve({
         success: code === 0,
-        code,
+        code: code ?? undefined,
         output
       });
     });
@@ -1075,9 +903,13 @@ async function runDockerCommandSilent(command, args, env, cwd) {
     dockerProcess.on('error', (error) => {
       resolve({
         success: false,
-        error: error.message,
+        error: getErrorMessage(error),
         output
       });
     });
   });
 }
+
+
+
+

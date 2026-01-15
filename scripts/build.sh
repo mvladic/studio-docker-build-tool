@@ -8,6 +8,7 @@ cd "$SCRIPT_DIR"
 LVGL_VERSION=""
 DISPLAY_WIDTH=""
 DISPLAY_HEIGHT=""
+FONTS_FILE=""
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -23,6 +24,10 @@ while [[ $# -gt 0 ]]; do
             DISPLAY_HEIGHT="${1#*=}"
             shift
             ;;
+        --fonts=*)
+            FONTS_FILE="${1#*=}"
+            shift
+            ;;
         *)
             echo "Unknown option: $1"
             exit 1
@@ -33,7 +38,7 @@ done
 # Check if mandatory argument is provided
 if [ -z "$LVGL_VERSION" ]; then
     echo "Error: --lvgl argument is mandatory"
-    echo "Usage: ./build.sh --lvgl=<version> [--display-width=<width>] [--display-height=<height>]"
+    echo "Usage: ./build.sh --lvgl=<version> [--display-width=<width>] [--display-height=<height>] [--fonts=<fonts-file>]"
     exit 1
 fi
 
@@ -44,6 +49,28 @@ fi
 
 if [ -n "$DISPLAY_HEIGHT" ]; then
     export DISPLAY_HEIGHT
+fi
+
+# Process fonts file if provided
+FONTS_PRELOAD=""
+if [ -n "$FONTS_FILE" ] && [ -f "$FONTS_FILE" ]; then
+    echo "Processing fonts from $FONTS_FILE..."
+    export FONTS_FILE
+    
+    # Build Emscripten preload flags for each font
+    while IFS= read -r font_path || [ -n "$font_path" ]; do
+        if [ -n "$font_path" ]; then
+            # Extract directory path without leading slash for preload-file
+            font_dir=$(dirname "$font_path")
+            # Construct the preload flag: --preload-file /project/fonts@/fonts
+            FONTS_PRELOAD="$FONTS_PRELOAD --preload-file /project${font_path}@${font_path}"
+            echo "  Will embed: ${font_path}"
+        fi
+    done < "$FONTS_FILE"
+    
+    # Export for use in CMakeLists.txt if needed
+    export FONTS_PRELOAD
+    echo "Fonts preload flags: $FONTS_PRELOAD"
 fi
 
 # Construct source directory path
@@ -122,7 +149,12 @@ NUM_CORES=$(nproc)
 
 # Run emcmake cmake
 echo "Running emcmake cmake..."
-emcmake cmake ..
+if [ -n "$FONTS_PRELOAD" ]; then
+    # Pass fonts flags through CMAKE_EXE_LINKER_FLAGS so they're actually used
+    emcmake cmake .. -DCMAKE_EXE_LINKER_FLAGS="$FONTS_PRELOAD"
+else
+    emcmake cmake ..
+fi
 if [ $? -ne 0 ]; then
     echo "CMake configuration failed!"
     exit 1

@@ -2,10 +2,12 @@
   "name": "eez-studio-docker-build-tool",
   "version": "1.0.0",
   "description": "Docker-based build tool for EEZ Studio projects",
-  "main": "src/main/main.js",
+  "main": "src/main/loader.js",
   "scripts": {
     "start": "electron .",
     "dev": "electron . --dev",
+    "compile": "tsc --project tsconfig.build.json",
+    "prebuild": "npm run compile",
     "build": "electron-builder",
     "build:win": "electron-builder --win",
     "build:mac": "electron-builder --mac",
@@ -21,6 +23,7 @@
   "author": "",
   "license": "MIT",
   "devDependencies": {
+    "@types/express": "^5.0.6",
     "@types/node": "^20.11.0",
     "electron": "^28.0.0",
     "electron-builder": "^24.13.3",
@@ -35,15 +38,33 @@
     "appId": "com.eez.studio.docker.build.tool",
     "productName": "EEZ Studio Docker Build Tool",
     "directories": {
-      "output": "dist"
+      "output": "dist",
+      "buildResources": "assets"
     },
     "files": [
-      "src/**/*",
-      "package.json"
+      "dist/src/**/*",
+      "dist/scripts/**/*",
+      "src/renderer/**/*",
+      "src/main/loader.js",
+      "src/main/preload.js",
+      "resources/docker-build/**/*",
+      "package.json",
+      "!dist/win-unpacked/**/*",
+      "!dist/*.exe",
+      "!dist/*.7z",
+      "!dist/*.blockmap",
+      "!dist/*.yml",
+      "!dist/*.yaml"
+    ],
+    "extraResources": [
+      {
+        "from": "resources/docker-build",
+        "to": "docker-build",
+        "filter": ["**/*"]
+      }
     ],
     "win": {
       "target": [
-        "nsis",
         "portable"
       ],
       "icon": "assets/icon.ico"

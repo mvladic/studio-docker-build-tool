@@ -7,7 +7,5 @@ build/
 output/
 temp/
 
-docker-build/output
-example-projects
-
+/resources/docker-build/output/**
 /output/**

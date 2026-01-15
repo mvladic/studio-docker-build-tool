@@ -21,8 +21,10 @@ import * as fs from 'fs';
 import * as path from 'path';
 import {
   ProjectInfo,
+  FontInfo,
   BuildConfig,
   checkDocker,
+  readProjectFile,
   setupProject,
   buildProject,
   extractBuild,
@@ -54,66 +56,6 @@ function log(message: string, type: 'info' | 'success' | 'error' | 'warning' = '
     warning: `${colors.yellow}[WARNING]${colors.reset}`,
   };
   console.log(`${timestamp} ${prefix[type]} ${message}`);
-}
-
-/**
- * Read and parse the EEZ project file
- */
-async function readProjectFile(projectPath: string): Promise<ProjectInfo> {
-  log(`Reading project file: ${projectPath}`);
-
-  if (!fs.existsSync(projectPath)) {
-    throw new Error(`Project file not found: ${projectPath}`);
-  }
-
-  const content = fs.readFileSync(projectPath, 'utf8');
-  const project = JSON.parse(content);
-
-  let lvglVersion = project.settings?.general?.lvglVersion;
-  const flowSupport = project.settings?.general?.flowSupport || false;
-  const displayWidth = project.settings?.general?.displayWidth || 800;
-  const displayHeight = project.settings?.general?.displayHeight || 480;
-  const destinationFolder = project.settings?.build?.destinationFolder || 'src/ui';
-
-  if (!lvglVersion) {
-    throw new Error('LVGL version not specified in project settings');
-  }
-
-  // Map unsupported versions to supported ones
-  const versionMap: Record<string, string> = {
-    '8.3': '8.4.0',
-    '8.3.0': '8.4.0',
-    '9.0': '9.2.2',
-    '9.0.0': '9.2.2',
-  };
-
-  if (versionMap[lvglVersion]) {
-    log(`LVGL version ${lvglVersion} mapped to ${versionMap[lvglVersion]}`, 'info');
-    lvglVersion = versionMap[lvglVersion];
-  }
-
-  const projectDir = path.dirname(projectPath);
-  const normalizedDestination = destinationFolder.replace(/\\/g, '/');
-  const uiDir = path.join(projectDir, normalizedDestination);
-
-  // Check if destination folder exists
-  if (!fs.existsSync(uiDir)) {
-    throw new Error(`Build destination directory not found at: ${uiDir}`);
-  }
-
-  log(`Detected project: LVGL ${lvglVersion} (${flowSupport ? 'with' : 'no'} flow support)`, 'success');
-  log(`Display: ${displayWidth}x${displayHeight}`);
-  log(`UI directory: ${uiDir}`);
-
-  return {
-    lvglVersion,
-    flowSupport,
-    projectDir,
-    uiDir,
-    destinationFolder: normalizedDestination,
-    displayWidth,
-    displayHeight,
-  };
 }
 
 /**
@@ -202,7 +144,7 @@ async function main() {
     log('');
 
     // Read project file
-    const projectInfo = await readProjectFile(projectFilePath);
+    const projectInfo = await readProjectFile(projectFilePath, log);
 
     // Setup project
     await setupProject(projectInfo, config, log);
